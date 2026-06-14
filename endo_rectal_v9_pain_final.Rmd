@@ -1,0 +1,3507 @@
+---
+title: "endo_rectal_v9_pain_final"
+author: "Cameron A. Gorzney, Stephen Johnson, Raunak Vijayakar, Michelle Bland"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load libraries
+
+```{r}
+###r version 4.3.2
+
+# # Install specific Bioconductor version
+# install.packages("BiocManager")
+# 
+# BiocManager::install(version = "3.17")
+# 
+# # Then install packages
+# BiocManager::install(c("phyloseq", "microbiome"))
+```
+
+
+```{r}
+# packageVersion("")
+library(vegan) #remotes::install_version("vegan", version = "2.6-10")
+library(ggrepel)
+library(readxl) #remotes::install_version("readxl", version = "1.4.5")  
+library(phyloseq) #see above
+library(ggplot2) #remotes::install_version("ggplot2", version = "4.0.0")  
+library(hrbrthemes) #remotes::install_version("hrbrthemes", version = "0.8.7")  
+library(ggsci) #remotes::install_version("ggsci", version = "3.2.0")  
+library(dplyr) #remotes::install_version("dplyr", version = "1.1.4")  
+library(microViz) #see below #needed to install "ggiraph" and "ComplexHeatmap"
+# install.packages(
+#   "microViz",
+#   repos = c(davidbarnett = "https://david-barnett.r-universe.dev", getOption("repos"))
+# )
+library(microbiome) #see above
+library(MicrobiomeStat) #remotes::install_version("MicrobiomeStat", version = "1.0")  
+library(GUniFrac) #remotes::install_version("GUniFrac", version = "1.8")
+library(picante) #remotes::install_version("picante", version = "1.8.2")
+library(ggtext) #remotes::install_version("ggtext", version = "2.6-10")
+library(tidyr)
+library(purrr)
+```
+
+## Process samples- Update paths as needed
+
+```{r}
+
+setwd()
+
+phylo = readRDS("data/Phylo_public.rds")
+meta = samdat_tbl(phylo)
+
+#look at metadata
+summarize_phyloseq(phylo)
+
+table(meta$Source) #I thought this was a binary variable? We'll use only vaginal and rectal
+table(meta$Plate, meta$case_control) #maybe include plate as covariate in models?
+
+```
+
+Add sample library size.
+
+```{r}
+depth = data.frame(lib_size = sample_sums(phylo))
+depth$SampleID = rownames(depth)
+depth$SampleID = sub('.', '', depth$SampleID)
+
+phylo = ps_join(x = phylo, y = depth, by = "SampleID", type = "inner", match_sample_names = NULL)
+
+sample_data(phylo)$subject = as.factor(sample_data(phylo)$subject)
+```
+
+
+```{r}
+unique(meta$Source)
+unique(meta$Amp.Status)
+
+phylo_r = phylo |> ps_filter(Source == "rectum") 
+temp = sample_data(phylo_r)
+unique(temp$Subject.ID)
+
+colSums(table(temp$Subject.ID, temp$case_control) != 0) #check sample size
+
+phylo_r = phylo_r |> ps_filter(Amp.Status == "Amp")
+meta_r = samdat_tbl(phylo_r)
+unique(meta_r$Subject.ID)
+
+colSums(table(meta_r$Subject.ID, meta_r$case_control) != 0) #check sample size
+
+#list the subjects who were lost after filtering for amplification
+unique(temp$Subject.ID[!(temp$Subject.ID %in% meta_r$Subject.ID)])
+
+```
+
+Merge and filter.
+
+```{r}
+merged_r = merge_samples(phylo_r, "subject", fun = sum)
+# We use the sum function here instead of mean to get correct lib_size.
+# The other numeric metadata are completely wrecked, as they would be with any function.
+
+# Keep subject IDs from the merged phyloseq object
+sample_data(merged_r)$Subject.ID = sample_names(merged_r)
+
+# Add corrected patient demographics metadata
+newdata = read_xlsx(
+"data/Newdata_endo_pain.xlsx",col_names = T, sheet = 1)
+
+splits = strsplit(newdata$`Study ID`, split = "-")
+splits = lapply(splits, head, 2)
+newdata$Subject.ID = sapply(splits, paste, collapse = "")
+
+
+# Keep all clinical variables from the corrected demographics sheet
+newdata = newdata |> 
+  dplyr::rename(
+    case_control_new = `case vs control`,
+    paratubal_cysts_new = `Paratubal Cysts`,
+    Gravidity_new = Graviditity,
+    Age_new = `Age at surgery`,
+    parity_status_new= `Parity status`,
+    parity_new = Parity,
+    BMI_new = BMI,
+    stage_new = stage,
+    Severity_new = Severity,
+    Endosalpingiosis_new = Endosalpingiosis,
+    Adenomyosis_new = Adenomyosis,
+    Fibroids_new = Fibroids,
+    pain_1st_level_new = pain_1st_level,
+    abnormal_bleeding_new = Abnormal_bleeding
+  ) |>
+  dplyr::select(
+    Subject.ID,
+    case_control_new,
+    BMI_new,
+    Age_new,
+    Gravidity_new,
+    stage_new,
+    Severity_new,
+    parity_status_new,
+    Endosalpingiosis_new,
+    Adenomyosis_new,
+    Fibroids_new,
+    paratubal_cysts_new,
+    parity_new,
+    pain_1st_level_new,
+    abnormal_bleeding_new,
+    Race,
+    Ethnicity
+  ) |>
+  dplyr::distinct(Subject.ID, .keep_all = TRUE)
+
+merged_r = ps_join(merged_r, newdata, by = "Subject.ID", type = "left")
+
+meta_pain <- samdat_tbl(merged_r)
+
+pain_subject <- meta_pain %>%
+  dplyr::select(Subject.ID, pain_1st_level_new) %>%
+  dplyr::distinct() %>%
+  dplyr::mutate(
+    pain_score = as.numeric(pain_1st_level_new),
+    pain_score = dplyr::case_when(
+      is.na(pain_score) ~ NA_real_,
+      pain_score == 99 ~ NA_real_,
+      pain_score < 0 ~ NA_real_,
+      pain_score > 10 ~ NA_real_,
+      TRUE ~ pain_score
+    ),
+    pain_severity = dplyr::case_when(
+      pain_score == 0 ~ "No pain",
+      pain_score >= 1 & pain_score <= 3 ~ "Mild pain",
+      pain_score >= 4 & pain_score <= 6 ~ "Moderate pain",
+      pain_score >= 7 & pain_score <= 10 ~ "Severe pain",
+      TRUE ~ NA_character_
+    ),
+    pain_severity = factor(
+      pain_severity,
+      levels = c("No pain", "Mild pain", "Moderate pain", "Severe pain")
+    ),
+    pain_binary = dplyr::case_when(
+      pain_score <= 3 ~ "No/Mild",
+      pain_score >= 4 ~ "Moderate/Severe",
+      TRUE ~ NA_character_
+    ),
+    pain_binary = factor(
+      pain_binary,
+      levels = c("No/Mild", "Moderate/Severe")
+    )
+  ) %>%
+  dplyr::filter(!is.na(pain_score)) %>%
+  dplyr::select(Subject.ID, pain_score, pain_severity, pain_binary)
+
+table(pain_subject$pain_score)
+table(pain_subject$pain_severity)
+table(pain_subject$pain_binary)
+
+
+merged_r = ps_join(merged_r, pain_subject, by = "Subject.ID", type = "inner")
+
+# Number of unique participants with BOTH microbiome + pain data
+n_distinct(sample_data(merged_r)$Subject.ID)
+
+# Check that corrected demographics are still present after join
+merged_meta_check = samdat_tbl(merged_r)
+
+colnames(merged_meta_check)
+
+table(merged_meta_check$case_control_new, useNA = "ifany")
+summary(merged_meta_check$BMI_new)
+summary(merged_meta_check$Age_new)
+summary(merged_meta_check$parity_new)
+table(merged_meta_check$Severity_new, useNA = "ifany")
+
+
+merged_r <- merged_r %>%
+  ps_filter(lib_size > 2000) %>%
+  tax_filter(min_prevalence = 2)
+
+merged_meta_r = samdat_tbl(merged_r)
+
+merged_meta_r$case_control_new = as.factor(merged_meta_r$case_control_new)
+merged_meta_r$case_control_new = relevel(merged_meta_r$case_control_new, ref = "control")
+merged_meta_r$Fibroids_new = as.factor(merged_meta_r$Fibroids_new)
+merged_meta_r$paratubal_cysts_new = as.factor(merged_meta_r$paratubal_cysts_new)
+merged_meta_r$Endosalpingiosis_new = as.factor(merged_meta_r$Endosalpingiosis_new)
+merged_meta_r$Adenomyosis_new = as.factor(merged_meta_r$Adenomyosis_new)
+
+
+#check for library size confounding
+summary(merged_meta_r$lib_size)
+hist(merged_meta_r$lib_size)
+boxplot(merged_meta_r$lib_size ~ merged_meta_r$case_control_new, notch = F)
+wilcox.test(merged_meta_r$lib_size ~ merged_meta_r$case_control_new)
+boxplot(merged_meta_r$lib_size ~ merged_meta_r$pain_severity, notch = F)
+kruskal.test(merged_meta_r$lib_size ~ merged_meta_r$pain_severity)
+
+
+#rarefy
+set.seed(123)
+rare_r = rarefy_even_depth(merged_r, replace = F) #rarefy to min depth or 2k, whichever greater
+
+```
+### Check matched samples
+```{r}
+# Rectal subjects after Amp + merge + pain join + lib_size/tax filtering
+rectal_pain_subjects <- samdat_tbl(merged_r) %>%
+  dplyr::filter(!is.na(pain_severity)) %>%
+  dplyr::distinct(Subject.ID) %>%
+  dplyr::pull(Subject.ID)
+
+
+phylo_v <- phylo |> 
+  ps_filter(Source == "vagina") |>
+  ps_filter(Amp.Status == "Amp")
+
+merged_v <- merge_samples(phylo_v, "subject", fun = sum)
+
+sample_data(merged_v)$Subject.ID <- sample_names(merged_v)
+
+merged_v <- ps_join(merged_v, newdata, by = "Subject.ID", type = "left")
+
+meta_pain_v <- samdat_tbl(merged_v)
+
+pain_subject_v <- meta_pain_v %>%
+  dplyr::select(Subject.ID, pain_1st_level_new) %>%
+  dplyr::distinct() %>%
+  dplyr::mutate(
+    pain_score = as.numeric(pain_1st_level_new),
+    pain_score = dplyr::case_when(
+      is.na(pain_score) ~ NA_real_,
+      pain_score == 99 ~ NA_real_,
+      pain_score < 0 ~ NA_real_,
+      pain_score > 10 ~ NA_real_,
+      TRUE ~ pain_score
+    ),
+    pain_severity = dplyr::case_when(
+      pain_score == 0 ~ "No pain",
+      pain_score >= 1 & pain_score <= 3 ~ "Mild pain",
+      pain_score >= 4 & pain_score <= 6 ~ "Moderate pain",
+      pain_score >= 7 & pain_score <= 10 ~ "Severe pain",
+      TRUE ~ NA_character_
+    ),
+    pain_severity = factor(
+      pain_severity,
+      levels = c("No pain", "Mild pain", "Moderate pain", "Severe pain")
+    )
+  ) %>%
+  dplyr::filter(!is.na(pain_score)) %>%
+  dplyr::select(Subject.ID, pain_score, pain_severity)
+
+merged_v <- ps_join(merged_v, pain_subject_v, by = "Subject.ID", type = "inner")
+
+merged_v <- merged_v %>%
+  ps_filter(lib_size > 2000) %>%
+  tax_filter(min_prevalence = 2)
+
+merged_meta_v <- samdat_tbl(merged_v)
+
+
+# Vaginal subjects after Amp + merge + pain join + lib_size/tax filtering
+vaginal_pain_subjects <- samdat_tbl(merged_v) %>%
+  dplyr::filter(!is.na(pain_severity)) %>%
+  dplyr::distinct(Subject.ID) %>%
+  dplyr::pull(Subject.ID)
+
+# Subjects with BOTH rectal and vaginal swabs in pain cohort
+matched_pain_subjects <- intersect(rectal_pain_subjects, vaginal_pain_subjects)
+
+length(matched_pain_subjects)
+matched_pain_subjects
+
+
+matched_pain_summary <- samdat_tbl(merged_r) %>%
+  dplyr::filter(Subject.ID %in% matched_pain_subjects) %>%
+  dplyr::distinct(Subject.ID, pain_severity, case_control_new) %>%
+  dplyr::arrange(pain_severity, Subject.ID)
+
+table(matched_pain_summary$pain_severity)
+table(matched_pain_summary$case_control_new, matched_pain_summary$pain_severity)
+
+
+# Subjects with BOTH rectal and vaginal data
+matched_subjects <- intersect(rectal_pain_subjects, vaginal_pain_subjects)
+
+# Total matched participants
+length(matched_subjects)
+```
+
+### Checking other diagnoses against Pain Severity
+```{r}
+categorical_pvals <- tibble::tibble(
+  Variable = c(
+    "Adenomyosis",
+    "Endosalpingiosis",
+    "Fibroids",
+    "Endometriosis",
+    "Paratubal Cysts",
+    "Abnormal Bleeding",
+    "Race",
+    "Ethnicity"
+    
+  ),
+  p_value = c(
+    fisher.test(table(merged_meta_r$Adenomyosis_new,
+                      merged_meta_r$pain_severity))$p.value,
+
+    fisher.test(table(merged_meta_r$Endosalpingiosis_new,
+                      merged_meta_r$pain_severity))$p.value,
+
+    fisher.test(table(merged_meta_r$Fibroids_new,
+                      merged_meta_r$pain_severity))$p.value,
+    
+    fisher.test(table(merged_meta_r$case_control_new,
+                      merged_meta_r$pain_severity))$p.value,
+
+    fisher.test(table(merged_meta_r$paratubal_cysts_new,
+                      merged_meta_r$pain_severity))$p.value,
+
+    fisher.test(table(merged_meta_r$abnormal_bleeding_new,
+                      merged_meta_r$pain_severity))$p.value,
+
+    fisher.test(table(merged_meta_r$Race,
+                      merged_meta_r$pain_severity))$p.value,
+
+    fisher.test(table(merged_meta_r$Ethnicity,
+                      merged_meta_r$pain_severity))$p.value
+  )
+) %>%
+  dplyr::mutate(
+    FDR = p.adjust(p_value, method = "BH")
+  
+)
+
+categorical_pvals
+
+### Continous Summary
+continuous_summary <- merged_meta_r %>%
+  dplyr::filter(
+    !is.na(pain_severity),
+    pain_severity %in% c("No pain", "Mild pain", "Moderate pain", "Severe pain")
+  ) %>%
+  dplyr::select(
+    Severity_new,
+    Age_new,
+    BMI_new,
+    Gravidity_new,
+    parity_new
+  ) %>%
+  tidyr::pivot_longer(
+    cols = c(Age_new, BMI_new, Gravidity_new, parity_new),
+    names_to = "Variable",
+    values_to = "Value"
+  ) %>%
+  dplyr::group_by(Variable, Severity_new) %>%
+  dplyr::summarise(
+    mean = mean(Value, na.rm = TRUE),
+    sd = sd(Value, na.rm = TRUE),
+    mean_sd = paste0(round(mean, 2), " ± ", round(sd, 2)),
+    n = sum(!is.na(Value)),
+    .groups = "drop"
+  )
+
+continuous_summary
+
+continuous_pvals_pain <- merged_meta_r %>%
+  dplyr::filter(!is.na(pain_severity)) %>%
+  dplyr::select(
+    pain_severity,
+    Age_new,
+    BMI_new,
+    Gravidity_new,
+    parity_new
+  ) %>%
+  tidyr::pivot_longer(
+    cols = c(Age_new, BMI_new, Gravidity_new, parity_new),
+    names_to = "Variable",
+    values_to = "Value"
+  ) %>%
+  dplyr::group_by(Variable) %>%
+  dplyr::summarise(
+    p_value = kruskal.test(Value ~ pain_severity)$p.value,
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(
+    FDR = p.adjust(p_value, method = "BH")
+  )
+
+continuous_pvals_pain
+
+```
+
+### Alpha Diversity for pain severity
+
+```{r}
+set.seed(123)
+
+metric_labels <- c(
+  Observed = "Observed ASVs",
+  Chao1 = "Chao1 Richness",
+  Shannon = "Shannon Diversity Index",
+  InvSimpson = "Inverse Simpson Index"
+)
+
+tax <- as.data.frame(tax_table(rare_r), stringsAsFactors = FALSE)
+
+plot_richness(rare_r, x="pain_severity", measures=c("Observed", "Chao1", "Shannon", "InvSimpson")) + geom_boxplot()
+
+rich_r <- estimate_richness(
+  rare_r,
+  measures = c("Observed", "Chao1", "Shannon", "InvSimpson")
+)
+
+rich_r$pain_severity <- sample_data(rare_r)$pain_severity
+
+rich_r <- rich_r %>%
+  mutate(
+    Subject.ID = sample_data(rare_r)$Subject.ID,
+    pain_score = sample_data(rare_r)$pain_score,
+    pain_severity = factor(
+      sample_data(rare_r)$pain_severity,
+      levels = c("No pain", "Mild pain", "Moderate pain", "Severe pain"),
+      labels = c("No pain\n(n = 6)", "Mild pain\n(n = 8)", "Moderate pain\n(n = 7)", "Severe pain\n(n = 9)")
+    ),
+    case_control = sample_data(rare_r)$case_control_new
+  )
+
+table(rich_r$pain_severity)
+
+alpha_results <- tibble(
+  Metric = c("Observed", "Chao1", "Shannon", "InvSimpson"),
+  Pvalue = c(
+    kruskal.test(Observed ~ pain_severity, data = rich_r)$p.value,
+    kruskal.test(Chao1 ~ pain_severity, data = rich_r)$p.value,
+    kruskal.test(Shannon ~ pain_severity, data = rich_r)$p.value,
+    kruskal.test(InvSimpson ~ pain_severity, data = rich_r)$p.value
+  )
+) %>%
+  mutate(
+    FDR = p.adjust(Pvalue, method = "fdr")#,
+    #p_label = paste0("Kruskal-Wallis p = ", signif(Pvalue, 3))
+  )
+
+alpha_results
+
+plot_alpha_metric <- function(metric_name) {
+  
+  p_value <- alpha_results %>%
+    filter(Metric == metric_name) %>%
+    pull(Pvalue)
+  
+  p_lab <- bquote("Kruskal-Wallis " * italic(p) == .(signif(p_value, 3)))
+  
+  ggplot(
+    rich_r,
+    aes(
+      x = pain_severity,
+      y = .data[[metric_name]],
+      fill = pain_severity
+    )
+  ) +
+    geom_boxplot(
+      outlier.shape = NA,
+      alpha = 0.75,
+      color = "black"
+    ) +
+    geom_jitter(
+      width = 0.12,
+      size = 3,
+      alpha = 0.85,
+      color = "black"
+    ) +
+    scale_fill_manual(
+      values = c(
+        "No pain\n(n = 6)" = "grey",
+        "Mild pain\n(n = 8)" = "#FDBB84",
+        "Moderate pain\n(n = 7)" = "#EF6548",
+        "Severe pain\n(n = 9)" = "#990000"
+      )
+    ) +
+    theme_classic(base_size = 14) +
+    theme(
+      legend.position = "none",
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 18, face = "bold"),
+      axis.text.y = element_text(size = 18),
+      axis.title.x = element_text(size = 18),
+      axis.title.y = element_text(size = 18, face = "bold"),
+      plot.subtitle = element_text(hjust = 0.5, size = 24, face = "bold"),
+      panel.background = element_rect(fill = "transparent", colour = NA),
+      plot.background = element_rect(fill = "transparent", colour = NA)
+    ) +
+    labs(
+      x = "Pain Severity",
+      y = metric_labels[[metric_name]],
+      #title = paste0(metric_labels[[metric_name]], " by pain severity"),
+      subtitle = p_lab
+    )
+}
+p_observed <- plot_alpha_metric("Observed")
+p_chao1 <- plot_alpha_metric("Chao1")
+p_shannon <- plot_alpha_metric("Shannon")
+p_invsimpson <- plot_alpha_metric("InvSimpson")
+
+p_observed
+p_chao1
+p_shannon
+p_invsimpson
+```
+
+```{r}
+# Save figures
+
+ggsave(
+  filename = "Observed_alpha_diversity.png",
+  plot = p_observed,
+  path = fig_dir,
+  width = 6,
+  height = 5.5,
+  units = "in",
+  dpi = 600,
+  bg = "transparent"
+)
+
+ggsave(
+  filename = "Observed_alpha_diversity.pdf",
+  plot = p_observed,
+  path = fig_dir,
+  width = 6,
+  height = 5.5,
+  units = "in",
+  device = "pdf",
+  bg = "transparent"
+)
+
+ggsave(
+  filename = "Chao1_alpha_diversity.png",
+  plot = p_chao1,
+  path = fig_dir,
+  width = 6,
+  height = 5.5,
+  units = "in",
+  dpi = 600,
+  bg = "transparent"
+)
+
+ggsave(
+  filename = "Chao1_alpha_diversity.pdf",
+  plot = p_chao1,
+  path = fig_dir,
+  width = 6,
+  height = 5.5,
+  units = "in",
+  dpi = 600,
+  bg = "transparent"
+)
+
+ggsave(
+  filename = "Shannon_alpha_diversity.png",
+  plot = p_shannon,
+  path = fig_dir,
+  width = 6,
+  height = 5.5,
+  units = "in",
+  dpi = 600,
+  bg = "transparent"
+)
+
+ggsave(
+  filename = "Shannon_alpha_diversity.pdf",
+  plot = p_shannon,
+  path = fig_dir,
+  width = 6,
+  height = 5.5,
+  units = "in",
+  dpi = 600,
+  bg = "transparent"
+)
+ggsave(
+  filename = "InvSimpson_alpha_diversity.png",
+  plot = p_invsimpson,
+  path = fig_dir,
+  width = 6,
+  height = 5.5,
+  units = "in",
+  dpi = 600,
+  bg = "transparent"
+)
+
+ggsave(
+  filename = "InvSimpson_alpha_diversity.pdf",
+  plot = p_invsimpson,
+  path = fig_dir,
+  width = 6,
+  height = 5.5,
+  units = "in",
+  dpi = 600,
+  bg = "transparent"
+)
+```
+
+
+Phylogenetic diversity from `picante`.
+
+```{r}
+set.seed(123)
+
+pd_result <- pd(
+  otu_table(rare_r),
+  phy_tree(rare_r),
+  include.root = TRUE
+)
+
+pd_df <- pd_result %>%
+  as.data.frame()
+
+pd_df$Subject.ID <- rownames(pd_df)
+
+pd_df$pain_severity <- sample_data(rare_r)$pain_severity
+
+pd_df <- pd_df %>%
+  mutate(
+    pain_severity = factor(
+      pain_severity,
+      levels = c("No pain", "Mild pain", "Moderate pain", "Severe pain"),
+      labels = c("No pain\n(n = 6)", "Mild pain\n(n = 8)", "Moderate pain\n(n = 7)", "Severe pain\n(n = 9)")
+    )
+  )
+
+pd_test <- kruskal.test(
+  PD ~ pain_severity,
+  data = pd_df
+)
+
+pd_test
+
+pd_label <- bquote("Kruskal-Wallis " * italic(p) == .(signif(pd_test$p.value, 3)))
+
+pd_plot <- ggplot(
+  pd_df,
+  aes(
+    x = pain_severity,
+    y = PD,
+    fill = pain_severity
+  )
+) +
+  geom_boxplot(
+    outlier.shape = NA,
+    alpha = 0.75,
+    color = "black"
+  ) +
+  geom_jitter(
+    width = 0.12,
+    size = 3,
+    alpha = 0.85,
+    color = "black"
+  ) +
+  scale_fill_manual(
+    values = c(
+      "No pain\n(n = 6)" = "grey",
+      "Mild pain\n(n = 8)" = "#FDBB84",
+      "Moderate pain\n(n = 7)" = "#EF6548",
+      "Severe pain\n(n = 9)" = "#990000"
+    )
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 18, face = "bold"),
+    axis.text.y = element_text(size = 18),
+      axis.title.x = element_text(size = 18),
+      axis.title.y = element_text(size = 18, face = "bold"),
+      plot.subtitle = element_text(hjust = 0.5, size = 24, face = "bold"),
+      panel.background = element_rect(fill = "transparent", colour = NA),
+      plot.background = element_rect(fill = "transparent", colour = NA)
+    ) +
+  labs(
+    x = "Pain Severity",
+    y = "Faith's Phylogenetic Diversity",
+    #title = "Phylogenetic diversity by pain severity",
+    subtitle = pd_label
+  )
+pd_plot
+```
+
+# Save Figures
+```{r}
+ggsave(
+  filename = "Faith_PD.png",
+  plot = pd_plot,
+  path = fig_dir,
+  width = 6,
+  height = 5.5,
+  units = "in",
+  dpi = 600,
+  bg = "transparent"
+)
+
+ggsave(
+  filename = "Faith_PD.pdf",
+  plot = pd_plot,
+  path = fig_dir,
+  width = 6,
+  height = 5.5,
+  units = "in",
+  device = "pdf",
+  bg = "transparent"
+)
+```
+
+### New beta diversity for pain severity, with plots
+
+```{r}
+set.seed(123)
+
+# Match metadata to rare_r sample order
+merged_meta_r <- merged_meta_r %>%
+  filter(Subject.ID %in% sample_names(rare_r)) %>%
+  arrange(match(Subject.ID, sample_names(rare_r)))
+
+merged_meta_r$pain_severity <- sample_data(rare_r)[merged_meta_r$Subject.ID, ]$pain_severity
+
+merged_meta_r <- merged_meta_r %>%
+  mutate(
+    pain_severity = factor(
+      pain_severity,
+      levels = c("No pain", "Mild pain", "Moderate pain", "Severe pain"),
+      labels = c(
+        "No pain (n = 6)",
+        "Mild pain (n = 8)",
+        "Moderate pain (n = 7)",
+        "Severe pain (n = 9)"
+      )
+    )
+  )
+
+table(merged_meta_r$pain_severity, useNA = "ifany")
+
+stopifnot(all(merged_meta_r$Subject.ID == sample_names(rare_r)))
+
+# ----------------------------------------------------------
+# Build distance matrices
+# ----------------------------------------------------------
+
+tree_r <- phy_tree(rare_r)
+
+otu_r <- as(otu_table(rare_r), "matrix")
+
+if (taxa_are_rows(rare_r)) {
+  otu_r <- t(otu_r)
+}
+
+otu_r <- otu_r[merged_meta_r$Subject.ID, ]
+
+unifracs <- GUniFrac(
+  otu.tab = otu_r,
+  tree = tree_r,
+  alpha = c(0, 0.5, 1)
+)$unifracs
+
+uni_dist <- as.dist(unifracs[, , "d_UW"])
+guni_dist <- as.dist(unifracs[, , "d_0.5"])
+wuni_dist <- as.dist(unifracs[, , "d_1"])
+jac_dist <- vegdist(otu_r, method = "jaccard", binary = TRUE)
+bray_dist <- vegdist(otu_r, method = "bray")
+
+### Prepare pseudocounts for aitchison
+# Genus-level non-rarefied counts
+merged_r_genus <- tax_glom(merged_r, taxrank = "Genus")
+
+genus_counts <- as.data.frame(otu_table(merged_r_genus))
+
+# Make sure rows = subjects and columns = taxa
+if (taxa_are_rows(merged_r_genus)) {
+  genus_counts <- as.data.frame(t(genus_counts))
+}
+
+# Add clean genus names as column names
+genera <- as.data.frame(tax_table(merged_r_genus))
+genus_names <- as.character(genera$Genus)
+genus_names[is.na(genus_names) | genus_names == ""] <- "unclassified"
+genus_names <- make.unique(genus_names)
+
+colnames(genus_counts) <- genus_names
+
+# CLR transform
+genus_counts_pseudo <- genus_counts + 1
+clr_mat <- compositions::clr(genus_counts_pseudo)
+
+# Aitchison PCA
+pca1 <- prcomp(clr_mat, center = TRUE, scale. = FALSE)
+summary(pca1)
+
+scores <- as.data.frame(pca1$x)
+scores$Subject.ID <- rownames(scores)
+
+# Aitchison distance
+aitch <- vegan::vegdist(clr_mat, method = "euclidean")
+# ----------------------------------------------------------
+# PERMANOVA
+# ----------------------------------------------------------
+
+uni_test <- adonis3(uni_dist ~ pain_severity, data = merged_meta_r)
+guni_test <- adonis3(guni_dist ~ pain_severity, data = merged_meta_r)
+jac_test <- adonis3(jac_dist ~ pain_severity, data = merged_meta_r)
+wuni_test <- adonis3(wuni_dist ~ pain_severity, data = merged_meta_r)
+bray_test <- adonis3(bray_dist ~ pain_severity, data = merged_meta_r)
+aitch_test <- adonis3(aitch ~ pain_severity, data = merged_meta_r)
+
+beta_results <- data.frame(
+  Metric = c(
+    "UniFrac",
+    "Generalized UniFrac",
+    "Jaccard",
+    "Weighted UniFrac",
+    "Bray-Curtis",
+    "Aitchison Distance"
+  ),
+  R2 = c(
+    uni_test$aov.tab$R2[1],
+    guni_test$aov.tab$R2[1],
+    jac_test$aov.tab$R2[1],
+    wuni_test$aov.tab$R2[1],
+    bray_test$aov.tab$R2[1],
+    aitch_test$aov.tab$R2[1]
+  ),
+  Pvalue = c(
+    uni_test$aov.tab$`Pr(>F)`[1],
+    guni_test$aov.tab$`Pr(>F)`[1],
+    jac_test$aov.tab$`Pr(>F)`[1],
+    wuni_test$aov.tab$`Pr(>F)`[1],
+    bray_test$aov.tab$`Pr(>F)`[1],
+    aitch_test$aov.tab$`Pr(>F)`[1]
+  )
+)
+
+beta_results$FDR <- p.adjust(beta_results$Pvalue, method = "fdr")
+
+beta_results
+
+# ----------------------------------------------------------
+# Plot settings
+# ----------------------------------------------------------
+
+pain_cols <- c(
+  "No pain (n = 6)" = "grey",
+  "Mild pain (n = 8)" = "#FDBB84",
+  "Moderate pain (n = 7)" = "#EF6548",
+  "Severe pain (n = 9)" = "#990000"
+)
+
+get_p <- function(metric_name) {
+  signif(beta_results$Pvalue[beta_results$Metric == metric_name], 3)
+}
+
+get_adj_p <- function(metric_name) {
+  signif(beta_results$FDR[beta_results$Metric == metric_name], 3)
+}
+
+# ----------------------------------------------------------
+# PCoA plots from phyloseq-supported distances
+# ----------------------------------------------------------
+sample_data(rare_r)$pain_severity <- factor(
+  sample_data(rare_r)$pain_severity,
+  levels = c("No pain", "Mild pain", "Moderate pain", "Severe pain"),
+  labels = c(
+    "No pain (n = 6)",
+    "Mild pain (n = 8)",
+    "Moderate pain (n = 7)",
+    "Severe pain (n = 9)"
+  )
+)
+
+ord_uni <- ordinate(rare_r, "PCoA", "unifrac")
+
+p_uni <- plot_ordination(rare_r, ord_uni, color = "pain_severity") +
+  stat_ellipse(
+    aes(group = pain_severity),
+    linewidth = 0.5,
+    show.legend = FALSE
+  ) +
+  geom_point(size = 3.5) +
+  scale_color_manual(values = pain_cols) +
+  theme_classic(base_size = 16) +
+ theme(
+    axis.text.x = element_text(size = 18, color = "black"),
+    axis.text.y = element_text(size = 18, color = "black"),
+    axis.title.x = element_text(size = 18, face = "bold"),
+    axis.title.y = element_text(size = 20, face = "bold"),
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 24),
+    plot.subtitle = element_text(size = 22, hjust = 0.5),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 18),
+    legend.margin = margin(0, 0, 0, 0),
+    
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    plot.background = element_rect(fill = "transparent", colour = NA),
+    
+    legend.background = element_blank(),
+    legend.box.background = element_blank(),
+    legend.key = element_blank()
+  ) +
+  labs(
+    #title = "PCoA using UniFrac",
+    x = paste0("PCoA1 [", round(ord_uni$values$Relative_eig[1] * 100, 1), "%]"),
+    y = paste0("PCoA2 [", round(ord_uni$values$Relative_eig[2] * 100, 1), "%]"),
+    title = bquote("UniFrac"),
+    subtitle = bquote("Adjusted " * italic(p) == .(get_adj_p("UniFrac"))),
+    color = "Pain Severity"
+  )
+
+ord_jac <- ordinate(rare_r, "PCoA", "jaccard")
+
+p_jac <- plot_ordination(rare_r, ord_jac, color = "pain_severity") +
+  stat_ellipse(
+    aes(group = pain_severity),
+    linewidth = 0.5,
+    show.legend = FALSE
+  ) +
+  geom_point(size = 3.5) +
+  scale_color_manual(values = pain_cols) +
+  theme_classic(base_size = 16) +
+  theme(
+    axis.text.x = element_text(size = 18, color = "black"),
+    axis.text.y = element_text(size = 18, color = "black"),
+    axis.title.x = element_text(size = 18, face = "bold"),
+    axis.title.y = element_text(size = 20, face = "bold"),
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 24),
+    plot.subtitle = element_text(size = 22, hjust = 0.5),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 18),
+    legend.margin = margin(0, 0, 0, 0),
+    
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    plot.background = element_rect(fill = "transparent", colour = NA),
+    
+    legend.background = element_blank(),
+    legend.box.background = element_blank(),
+    legend.key = element_blank()
+  ) +
+  labs(
+    #title = "PCoA using Jaccard",
+    x = paste0("PCoA1 [", round(ord_jac$values$Relative_eig[1] * 100, 1), "%]"),
+    y = paste0("PCoA2 [", round(ord_jac$values$Relative_eig[2] * 100, 1), "%]"),
+    title = bquote("Jaccard"),
+    subtitle = bquote("Adjusted " * italic(p) == .(get_adj_p("Jaccard"))),
+    color = "Pain Severity"
+  )
+
+ord_wuni <- ordinate(rare_r, "PCoA", "wunifrac")
+
+p_wuni <- plot_ordination(rare_r, ord_wuni, color = "pain_severity") +
+  stat_ellipse(
+    aes(group = pain_severity),
+    linewidth = 0.5,
+    show.legend = FALSE
+  ) +
+  geom_point(size = 3.5) +
+  scale_color_manual(values = pain_cols) +
+  theme_classic(base_size = 16) +
+  theme(
+    axis.text.x = element_text(size = 18, color = "black"),
+    axis.text.y = element_text(size = 18, color = "black"),
+    axis.title.x = element_text(size = 18, face = "bold"),
+    axis.title.y = element_text(size = 20, face = "bold"),
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 24),
+    plot.subtitle = element_text(size = 22, hjust = 0.5),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 18),
+    legend.margin = margin(0, 0, 0, 0),
+    
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    plot.background = element_rect(fill = "transparent", colour = NA),
+    
+    legend.background = element_blank(),
+    legend.box.background = element_blank(),
+    legend.key = element_blank()
+  ) +
+  labs(
+    #title = "PCoA using Weighted UniFrac",
+    x = paste0("PCoA1 [", round(ord_wuni$values$Relative_eig[1] * 100, 1), "%]"),
+    y = paste0("PCoA2 [", round(ord_wuni$values$Relative_eig[2] * 100, 1), "%]"),
+    title = bquote("Weighted UniFrac"),
+    subtitle = bquote("Adjusted " * italic(p) == .(get_adj_p("Weighted UniFrac"))),
+    color = "Pain Severity"
+  )
+
+ord_bray <- ordinate(rare_r, "PCoA", "bray")
+
+p_bray <- plot_ordination(rare_r, ord_bray, color = "pain_severity") +
+  stat_ellipse(
+    aes(group = pain_severity),
+    linewidth = 0.5,
+    show.legend = FALSE
+  ) +
+  geom_point(size = 3.5) +
+  scale_color_manual(values = pain_cols) +
+  theme_classic(base_size = 16) +
+  theme(
+    axis.text.x = element_text(size = 18, color = "black"),
+    axis.text.y = element_text(size = 18, color = "black"),
+    axis.title.x = element_text(size = 18, face = "bold"),
+    axis.title.y = element_text(size = 20, face = "bold"),
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 24),
+    plot.subtitle = element_text(size = 22, hjust = 0.5),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 18),
+    legend.margin = margin(0, 0, 0, 0),
+    
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    plot.background = element_rect(fill = "transparent", colour = NA),
+    
+    legend.background = element_blank(),
+    legend.box.background = element_blank(),
+    legend.key = element_blank()
+  ) +
+  labs(
+    #title = "PCoA using Bray-Curtis",
+    x = paste0("PCoA1 [", round(ord_bray$values$Relative_eig[1] * 100, 1), "%]"),
+    y = paste0("PCoA2 [", round(ord_bray$values$Relative_eig[2] * 100, 1), "%]"),
+    title = bquote ("Bray-Curtis"),
+    subtitle = bquote("Adjusted " * italic(p) == .(get_adj_p("Bray-Curtis"))),
+    color = "Pain Severity"
+  )
+
+
+# PCA scores
+scores <- as.data.frame(pca1$x)
+scores$Subject.ID <- rownames(scores)
+
+# Verify IDs match metadata
+setequal(scores$Subject.ID, merged_meta_r$Subject.ID)
+
+
+# Add pain severity to metadata
+scores <- scores %>%
+  dplyr::left_join(
+    merged_meta_r %>%
+      dplyr::select(Subject.ID, pain_severity),
+    by = "Subject.ID"
+  )
+
+table(scores$pain_severity, useNA = "always")
+
+
+# Axis labels
+var_exp <- (pca1$sdev^2) / sum(pca1$sdev^2)
+
+xlab <- paste0("PC1 [", round(100 * var_exp[1], 1), "%]")
+ylab <- paste0("PC2 [", round(100 * var_exp[2], 1), "%]")
+
+#Add Aitchison axes and clusters directly to merged_meta_r
+merged_meta_r <- merged_meta_r %>%
+dplyr::select(
+     -any_of(c(
+       "PC1",
+       "PC2"
+     ))
+   ) %>%
+   dplyr::left_join(
+     scores %>%
+       dplyr::select(
+         Subject.ID,
+         PC1,
+         PC2,
+       ),
+     by = "Subject.ID"
+   )
+
+# Aitchison PCA plot
+p_aitch <- ggplot(
+   merged_meta_r,
+   aes(
+     x = PC1,
+     y = PC2,
+     color = pain_severity
+   )
+ ) +
+ 
+   stat_ellipse(
+    aes(group = pain_severity),
+    linewidth = 0.5,
+    show.legend = FALSE
+  ) +
+
+  geom_point(size = 3.5) +
+  scale_color_manual(values = pain_cols) +
+  theme_classic(base_size = 16) +
+  theme(
+    axis.text.x = element_text(size = 18, color = "black"),
+    axis.text.y = element_text(size = 18, color = "black"),
+    axis.title.x = element_text(size = 18, face = "bold"),
+    axis.title.y = element_text(size = 20, face = "bold"),
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 24),
+    plot.subtitle = element_text(size = 22, hjust = 0.5),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 18),
+    legend.margin = margin(0, 0, 0, 0),
+
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    plot.background = element_rect(fill = "transparent", colour = NA),
+
+    legend.background = element_blank(),
+    legend.box.background = element_blank(),
+    legend.key = element_blank()
+  ) +
+  labs(
+    x = xlab,
+    y = ylab,
+    title = bquote("Aitchison Distance"),
+    subtitle = bquote("Adjusted " * italic(p) == .(get_adj_p("Aitchison Distance")))
+  )
+
+
+p_aitch
+
+# ----------------------------------------------------------
+# Generalized UniFrac PCoA manually from GUniFrac distance
+# ----------------------------------------------------------
+
+ord_guni <- cmdscale(guni_dist, eig = TRUE, k = 2)
+
+guni_var = round(ord_guni$eig/sum(ord_guni$eig)*100, 1)
+
+guni_df <- data.frame(
+  Subject.ID = rownames(ord_guni$points),
+  Axis1 = ord_guni$points[, 1],
+  Axis2 = ord_guni$points[, 2]
+) %>%
+  left_join(
+    merged_meta_r %>%
+      dplyr::select(Subject.ID, pain_severity),
+    by = "Subject.ID"
+  )
+
+p_guni <- ggplot(
+  guni_df,
+  aes(
+    x = Axis1,
+    y = Axis2,
+    color = pain_severity
+  )
+) +
+  stat_ellipse(
+    aes(group = pain_severity),
+    linewidth = 0.5,
+    show.legend = FALSE
+  ) +
+  geom_point(size = 3.5) +
+  scale_color_manual(values = pain_cols) +
+  theme_classic(base_size = 16) +
+  theme(
+    axis.text.x = element_text(size = 18, color = "black"),
+    axis.text.y = element_text(size = 18, color = "black"),
+    axis.title.x = element_text(size = 18, face = "bold"),
+    axis.title.y = element_text(size = 20, face = "bold"),
+    #plot.title = element_text(size = 22, hjust = 0.5),
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 24),
+    plot.subtitle = element_text(size = 22, hjust = 0.5),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 18),
+    legend.margin = margin(0, 0, 0, 0),
+    
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    plot.background = element_rect(fill = "transparent", colour = NA),
+    
+    legend.background = element_blank(),
+    legend.box.background = element_blank(),
+    legend.key = element_blank()
+  ) +
+  labs(
+    #title = "PCoA using Generalized UniFrac",
+    x = paste0("PCoA1 [", guni_var[1], "%]"),
+    y = paste0("PCoA2 [", guni_var[2], "%]"),
+    title = bquote("Generalized UniFrac"),
+    subtitle = bquote("Adjusted " * italic(p) == .(get_adj_p("Generalized UniFrac"))),
+    color = "Pain Severity"
+  )
+
+# Print individual plots (raw p-values)
+p_uni
+p_guni #not sure why guni didn't have %var on axes. -fixed it above.
+p_jac
+p_wuni
+p_bray
+p_aitch
+```
+
+### Save beta-diversity plots
+```{r}
+ggsave(
+  filename = "Bray-Curtis.pdf",
+  plot = p_bray,
+  path = fig_dir,
+  width = 8,
+  height = 5.5,
+  units = "in",
+  device = "pdf",
+  bg = "transparent"
+)
+ggsave(
+  filename = "Bray-Curtis.png",
+  plot = p_bray,
+  path = fig_dir,
+  width = 8,
+  height = 5.5,
+  units = "in",
+  bg = "transparent"
+)
+
+ggsave(
+  filename = "UniFrac.pdf",
+  plot = p_uni,
+  path = fig_dir,
+  width = 8,
+  height = 5.5,
+  units = "in",
+  device = "pdf",
+  bg = "transparent"
+)
+
+ggsave(
+  filename = "UniFrac.png",
+  plot = p_uni,
+  path = fig_dir,
+  width = 8,
+  height = 5.5,
+  units = "in",
+  bg = "transparent"
+)
+
+ggsave(
+  filename = "WUniFrac.pdf",
+  plot = p_wuni,
+  path = fig_dir,
+  width = 8,
+  height = 5.5,
+  units = "in",
+  device = "pdf",
+  bg = "transparent"
+)
+ggsave(
+  filename = "WUniFrac.png",
+  plot = p_wuni,
+  path = fig_dir,
+  width = 8,
+  height = 5.5,
+  units = "in",
+  bg = "transparent"
+)
+
+ggsave(
+  filename = "GUniFrac.pdf",
+  plot = p_guni,
+  path = fig_dir,
+  width = 8,
+  height = 5.5,
+  units = "in",
+  device = "pdf",
+  bg = "transparent"
+)
+
+ggsave(
+  filename = "GUniFrac.png",
+  plot = p_guni,
+  path = fig_dir,
+  width = 8,
+  height = 5.5,
+  units = "in",
+  bg = "transparent"
+)
+
+ggsave(
+  filename = "Jaccard.pdf",
+  plot = p_jac,
+  path = fig_dir,
+  width = 8,
+  height = 5.5,
+  units = "in",
+  device = "pdf",
+  bg = "transparent"
+)
+
+ggsave(
+  filename = "Jaccard.png",
+  plot = p_jac,
+  path = fig_dir,
+  width = 8,
+  height = 5.5,
+  units = "in",
+  bg = "transparent"
+)
+
+ggsave(
+  filename = "Aitch.pdf",
+  plot = p_aitch,
+  path = fig_dir,
+  width = 8,
+  height = 5.5,
+  units = "in",
+  device = "pdf",
+  bg = "transparent"
+)
+
+```
+
+#### PAM clustering
+
+##### Bray-Curtis for pain severity
+
+Calculate BC dissimilarity on rarefied data, then cluster with PAM, k selected using mean silhouette width.
+```{r}
+#determine number of clusters
+library(cluster) #remotes::install_version("cluster", version = "2.1.8.1")
+library(scales) #remotes::install_version("scales", version = "1.4.0")
+
+#use sil to choose number of clusters
+set.seed(123)
+k.max <- 10
+
+SIL = sapply(2:k.max, function(i) {
+  results.coef.pam =  pam(bray_dist, i, nstart=50, diss = T)
+  mean(silhouette(results.coef.pam$clustering, dist = bray_dist)[,"sil_width"]) })
+
+plot(c(0,SIL), type="b", main = "Selecting k PAM clusters", ylab = "Mean Silhouette Width", xlab = "Clusters")
+
+
+```
+
+Visualize clusters and pain severity status on PCoA. 
+
+```{r}
+set.seed(123)
+pam_bc = pam(bray_dist, 2, nstart = 50, diss = T)
+
+# ord = cmdscale(bray_dist, 4, eig = TRUE)
+# plot(ord$points, col = clusters, pch = 19, xlab="PCoA1", ylab="PCoA2")
+
+sample_data(rare_r)$Cluster = as.factor(pam_bc$clustering) #add clustering information to ps object's sample data
+
+ord = ordinate(rare_r, "PCoA", "bray")
+plot_ordination(rare_r, ord, color = "pain_severity", shape = "Cluster") +
+  geom_point(size = 3) + 
+  labs(title = "PCoA using Bray-Curtis") +
+  theme_ipsum() +
+  scale_color_bmj()
+```
+
+Correlate rarefied abundances with PCoA axes to look for gradients.
+```{r}
+#save axes
+bc_axis.1 = ord$vectors[,1]
+bc_axis.2 = ord$vectors[,2]
+```
+
+### Merge BC axis with merged_meta_r 
+```{r}
+bc_axis1.df <- data.frame(
+  Subject.ID = names(bc_axis.1),
+  bray_pcoa1 = as.numeric(bc_axis.1)
+)
+
+merged_meta_r <- merged_meta_r %>%
+  dplyr::select(-any_of("bray_pcoa1")) %>%
+  left_join(bc_axis1.df, by = "Subject.ID")
+
+sum(is.na(merged_meta_r$bray_pcoa1))
+head(merged_meta_r[, c("Subject.ID", "bray_pcoa1")])
+all(bc_axis1.df$Subject.ID %in% merged_meta_r$Subject.ID)
+```
+
+### CLR, Aitchison PCA, PAM clusters
+
+```{r}
+library(zCompositions)
+library(compositions)
+library(cluster)
+
+
+# Select k for PAM clustering
+set.seed(123)
+k.max <- 10
+
+SIL <- sapply(2:k.max, function(i) {
+  pam_fit <- pam(aitch, i, nstart = 50, diss = TRUE)
+  mean(cluster::silhouette(pam_fit$clustering, dist = aitch)[, "sil_width"])
+})
+
+aitch_plot <- plot(
+  2:k.max,
+  SIL,
+  type = "b",
+  main = "Selecting k PAM clusters",
+  ylab = "Mean Silhouette Width",
+  xlab = "Clusters"
+)
+
+
+sil_df <- data.frame(
+  Clusters = 2:k.max,
+  Mean_Silhouette = SIL
+)
+
+p_sil <- ggplot(
+  sil_df,
+  aes(x = Clusters, y = Mean_Silhouette)
+) +
+  geom_line() +
+  geom_point(size = 3) +
+  theme_classic(base_size = 16) +
+  theme(
+    axis.text = element_text(size = 18, color = "black"),
+    axis.title = element_text(size = 18, face = "bold"),
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    plot.background = element_rect(fill = "transparent", colour = NA)
+  ) +
+  labs(
+    x = "Clusters",
+    y = "Mean Silhouette Width"
+  )
+
+p_sil
+
+```
+
+## Save SIL
+```{r}
+ggsave(
+  filename = "Aitch_SIL_plot.pdf",
+  plot = p_sil,
+  path = fig_dir,
+  width = 6,
+  height = 5,
+  units = "in",
+  device = "pdf",
+  bg = "transparent"
+)
+```
+
+# PAM clustering using k = 3 --> identified 3 clusters after updating samples
+```{r}
+set.seed(123)
+pam_aitch <- pam(aitch, 3, nstart = 50, diss = TRUE)
+
+cluster_df <- data.frame(
+  Subject.ID = rownames(clr_mat),
+  Cluster_Aitchison = factor(pam_aitch$clustering)
+)
+
+scores <- scores %>%
+  dplyr::left_join(cluster_df, by = "Subject.ID")
+
+# Axis labels
+var_exp <- (pca1$sdev^2) / sum(pca1$sdev^2)
+
+xlab <- paste0("PC1 [", round(100 * var_exp[1], 1), "%]")
+ylab <- paste0("PC2 [", round(100 * var_exp[2], 1), "%]")
+
+# Add Aitchison axes and clusters directly to merged_meta_r
+merged_meta_r <- merged_meta_r %>%
+  dplyr::select(
+    -any_of(c(
+      "PC1",
+      "PC2",
+      "Cluster_Aitchison"
+    ))
+  ) %>%
+  dplyr::left_join(
+    scores %>%
+      dplyr::select(
+        Subject.ID,
+        PC1,
+        PC2,
+        Cluster_Aitchison
+      ),
+    by = "Subject.ID"
+  )
+
+# Keep CLR taxa table available for later taxa/heatmap analyses
+clr_df <- as.data.frame(clr_mat)
+clr_df$Subject.ID <- rownames(clr_df)
+
+pain_cols_n <- c(
+  "No pain (n = 6)" = "grey",
+  "Mild pain (n = 8)" = "#FDBB84",
+  "Moderate pain (n = 7)" = "#EF6548",
+  "Severe pain (n = 9)" = "#990000"
+)
+
+merged_meta_r <- merged_meta_r %>%
+  mutate(
+    pain_severity_plot = factor(
+      as.character(pain_severity),
+      levels = c(
+        "No pain (n = 6)",
+        "Mild pain (n = 8)",
+        "Moderate pain (n = 7)",
+        "Severe pain (n = 9)"
+      ),
+      ordered = TRUE
+    ),
+    pain_severity_clean = factor(
+      dplyr::case_when(
+        as.character(pain_severity) == "No pain (n = 6)" ~ "No pain",
+        as.character(pain_severity) == "Mild pain (n = 8)" ~ "Mild pain",
+        as.character(pain_severity) == "Moderate pain (n = 7)" ~ "Moderate pain",
+        as.character(pain_severity) == "Severe pain (n = 9)" ~ "Severe pain"
+      ),
+      levels = c("No pain", "Mild pain", "Moderate pain", "Severe pain"),
+      ordered = TRUE
+    )
+  )
+
+# merged_meta_r$Cluster_Aitchison <- factor(
+#   merged_meta_r$Cluster_Aitchison,
+#   levels = c(1, 2, 3),
+#   labels = c("Cluster 1", "Cluster 2", "Cluster 3")
+# )
+
+# Plot Aitchison PCA by pain severity and cluster
+aitch_plot <- ggplot(
+  merged_meta_r,
+  aes(
+    x = PC1,
+    y = PC2,
+    color = pain_severity,
+    shape = Cluster_Aitchison
+  )
+) +
+  
+  stat_ellipse(
+    data = merged_meta_r,
+    aes(group = Cluster_Aitchison),
+    linewidth = 0.5,
+    linetype = 2,
+    #color = "black",
+    type = "norm"
+  ) +
+  
+  geom_point(size = 4) +
+  scale_color_manual(values = pain_cols_n) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(size = 18, color = "black"),
+    axis.text.y = element_text(size = 18, color = "black"),
+    axis.title.x = element_text(size = 18, face = "bold"),
+    axis.title.y = element_text(size = 18, face = "bold"),
+    plot.title = element_text(size = 24, hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(size = 22, hjust = 0.5),
+    legend.title = element_text(size = 18, face = "bold"),
+    legend.text = element_text(size = 18),
+    legend.margin = margin(0, 0, 0, 0),
+    
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    plot.background = element_rect(fill = "transparent", colour = NA),
+    
+    legend.background = element_blank(),
+    legend.box.background = element_blank(),
+    legend.key = element_blank()
+  ) +
+  labs(
+    title = "Aitchison Distance",
+    x = xlab,
+    y = ylab,
+    color = "Pain Severity",
+    shape = "Aitchison Cluster"
+  )
+
+aitch_plot
+sum(is.na(merged_meta_r$PC1))
+sum(is.na(merged_meta_r$Cluster_Aitchison))
+all(scores$Subject.ID %in% merged_meta_r$Subject.ID)
+
+```
+
+### Save Clusters
+```{r}
+ggsave(
+  filename = "Aitchison_pain.png",
+  plot = aitch_plot,
+  path = fig_dir,
+  width = 8,
+  height = 5.5,
+  units = "in",
+  bg = "transparent"
+)
+
+ggsave(
+  filename = "Aitchison_pain.pdf",
+  plot = aitch_plot,
+  path = fig_dir,
+  width = 8,
+  height = 5.5,
+  units = "in",
+  device = "pdf",
+  bg = "transparent"
+)
+
+```
+
+### DAA using ZicoSeq with Respect to pain severity 
+
+```{r}
+############################################################
+# ZicoSeq DAA by categorical pain severity
+############################################################
+set.seed(123)
+
+library(GUniFrac)
+library(phyloseq)
+library(tidyverse)
+library(ggrepel)
+
+# ----------------------------------------------------------
+# 1. Prepare clean pain severity metadata
+# ----------------------------------------------------------
+
+merged_meta_r <- merged_meta_r %>%
+  mutate(
+    pain_severity_cat = case_when(
+      grepl("^No pain", pain_severity) ~ "No pain",
+      grepl("^Mild pain", pain_severity) ~ "Mild pain",
+      grepl("^Moderate pain", pain_severity) ~ "Moderate pain",
+      grepl("^Severe pain", pain_severity) ~ "Severe pain",
+      TRUE ~ NA_character_
+    ),
+    pain_severity_cat = factor(
+      pain_severity_cat,
+      levels = c("No pain", "Mild pain", "Moderate pain", "Severe pain")
+    )
+  )
+
+table(merged_meta_r$pain_severity_cat, useNA = "ifany")
+
+
+# ----------------------------------------------------------
+# 2. Build genus-level count matrix: taxa x samples
+# ----------------------------------------------------------
+
+otu_zico <- as(otu_table(merged_r_genus), "matrix")
+
+if (!taxa_are_rows(merged_r_genus)) {
+  otu_zico <- t(otu_zico)
+}
+
+storage.mode(otu_zico) <- "numeric"
+
+# Preserve taxa names safely
+taxa_ids <- taxa_names(merged_r_genus)
+
+if (length(taxa_ids) == nrow(otu_zico)) {
+  rownames(otu_zico) <- taxa_ids
+} else {
+  rownames(otu_zico) <- paste0("Taxon_", seq_len(nrow(otu_zico)))
+}
+
+rownames(otu_zico) <- make.unique(as.character(rownames(otu_zico)))
+
+
+# ----------------------------------------------------------
+# 3. Match metadata to OTU columns
+# ----------------------------------------------------------
+
+meta_zico <- merged_meta_r %>%
+  filter(
+    Subject.ID %in% colnames(otu_zico),
+    !is.na(pain_severity_cat)
+  ) %>%
+  arrange(match(Subject.ID, colnames(otu_zico))) %>%
+  as.data.frame()
+
+rownames(meta_zico) <- meta_zico$Subject.ID
+
+otu_zico <- otu_zico[, rownames(meta_zico), drop = FALSE]
+
+# One prevalence filter only
+otu_zico <- otu_zico[rowSums(otu_zico > 0) >= 3, , drop = FALSE]
+
+# Sanity checks
+stopifnot(nrow(meta_zico) > 0)
+stopifnot(nrow(otu_zico) > 0)
+stopifnot(ncol(otu_zico) == nrow(meta_zico))
+stopifnot(all(colnames(otu_zico) == rownames(meta_zico)))
+
+
+# ----------------------------------------------------------
+# 4. Run ZicoSeq
+# ----------------------------------------------------------
+
+set.seed(123)
+
+zico_pain_categorical <- ZicoSeq(
+  meta.dat = meta_zico,
+  feature.dat = otu_zico,
+  grp.name = "pain_severity_cat",
+  adj.name = NULL,
+  feature.dat.type = "count",
+  is.winsor = TRUE,
+  outlier.pct = 0.03,
+  winsor.end = "top",
+  is.post.sample = FALSE,
+  link.func = list(function(x) x^0.5),
+  stats.combine.func = max,
+  perm.no = 999,
+  strata = NULL,
+  ref.pct = 0.5,
+  stage.no = 6,
+  excl.pct = 0.2,
+  is.fwer = FALSE,
+  verbose = TRUE,
+  return.feature.dat = TRUE
+)
+
+# ----------------------------------------------------------
+# 5. Build clean ZicoSeq results table
+# ----------------------------------------------------------
+
+zico_results_categorical <- data.frame(
+  Taxon = names(zico_pain_categorical$p.raw),
+  p.raw = as.numeric(zico_pain_categorical$p.raw),
+  p.adj.fdr = as.numeric(zico_pain_categorical$p.adj.fdr),
+  R2 = as.numeric(zico_pain_categorical$R2)
+) %>%
+  arrange(p.adj.fdr)
+
+# Add taxonomy
+tax_df <- as.data.frame(tax_table(merged_r_genus))
+tax_df$Taxon <- rownames(tax_df)
+
+zico_results_categorical <- zico_results_categorical %>%
+  left_join(tax_df, by = "Taxon")
+
+# Pull significant taxa
+sig_zico_taxa <- zico_results_categorical %>%
+  filter(p.adj.fdr < 0.05)
+
+sig_zico_taxa
+
+# ----------------------------------------------------------
+# 6. Generic ZicoSeq DAA volcano plot
+# ----------------------------------------------------------
+
+zico_plot_df <- zico_results_categorical %>%
+  mutate(
+    neg_log10_fdr = -log10(p.adj.fdr),
+    Significant = ifelse(p.adj.fdr < 0.05, "FDR < 0.05", "Non-significant"),
+    Genus_clean = case_when(
+      Genus == "W5053" ~ "Clostridiales Family XI W5053",
+      is.na(Genus) | Genus == "" ~ Taxon,
+      TRUE ~ stringr::str_replace_all(Genus, "_", " ")
+    ),
+    Label = ifelse(
+      p.adj.fdr < 0.05,
+      paste0("italic(\"", Genus_clean, "\")"),
+      NA_character_
+    )
+  )
+
+zico_plot <- ggplot(
+  zico_plot_df,
+  aes(
+    x = R2,
+    y = neg_log10_fdr,
+    color = Significant
+  )
+) +
+  geom_point(size = 3, alpha = 0.8) +
+  geom_hline(
+    yintercept = -log10(0.05),
+    linetype = "dashed",
+    color = "black"
+  ) +
+  geom_text_repel(
+    aes(label = Label),
+    size = 8,
+    parse = TRUE,
+    max.overlaps = Inf,
+    box.padding = 0.5,
+    point.padding = 0.4,
+    na.rm = TRUE,
+    show.legend = FALSE
+  ) +
+  scale_color_manual(
+    values = c(
+      "Non-significant" = "grey75",
+      "FDR < 0.05" = "#cb181d"
+    )
+  ) +
+  theme_classic(base_size = 16) +
+  theme(
+    axis.text.x = element_text(size = 18, color = "black"),
+    axis.text.y = element_text(size = 18, color = "black"),
+    axis.title.x = element_text(size = 18, face = "bold"),
+    axis.title.y = element_text(size = 18, face = "bold"),
+    #plot.title = element_text(size = 22, hjust = 0.5),
+    plot.subtitle = element_text(size = 24, hjust = 0.5),
+    legend.title = element_text(size = 18),
+    legend.text = element_text(size = 18),
+    legend.margin = margin(0, 0, 0, 0),
+    
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    plot.background = element_rect(fill = "transparent", colour = NA),
+    
+    legend.background = element_blank(),
+    legend.box.background = element_blank(),
+    legend.key = element_blank()
+  ) +
+  labs(
+    x = expression(R^2),
+    y = expression(-log[10]("FDR")),
+    color = ""
+  )
+zico_plot
+```
+
+## Save DAA
+```{r}
+ggsave(
+  filename = "zico_pain.png",
+  plot = zico_plot,
+  path = fig_dir,
+  width = 9,
+  height = 5.5,
+  units = "in",
+  bg = "transparent"
+)
+
+ggsave(
+  filename = "zico_pain.pdf",
+  plot = zico_plot,
+  path = fig_dir,
+  width = 9,
+  height = 5.5,
+  units = "in",
+  device = "pdf",
+  bg = "transparent"
+)
+```
+
+### Heatmap for taxa by pain severity]
+i am unsure if we are using the right values, is CLR still appropriate even though zicoseq should use counts? 
+
+R: CLR is good here. ZicoSeq as a function accepts counts, but it internally uses reference taxa to deal with compositionality, and a square root transform to normalize the count distribution (I added that).
+
+Need to update boxplots to fix it not being mean of median...look at distribution of the medians for summary of CLR. This is showing distribution of medians, white=mean of the median...too confusing, update to be more straightforward.
+
+```{r}
+############################################################
+# CLR table with original taxon IDs for ZicoSeq taxa
+############################################################
+
+clr_df_zico <- as.data.frame(clr_mat)
+
+colnames(clr_df_zico) <- taxa_names(merged_r_genus)
+
+clr_df_zico$Subject.ID <- rownames(clr_df_zico)
+
+clr_meta <- clr_df_zico %>%
+  left_join(
+    merged_meta_r %>%
+      dplyr::select(Subject.ID, pain_severity_cat),
+    by = "Subject.ID"
+  )
+
+# Calculate median CLR per pain group
+heat_df <- clr_meta %>%
+  dplyr::select(
+    Subject.ID,
+    pain_severity_cat,
+    all_of(sig_zico_taxa$Taxon)
+  ) %>%
+  pivot_longer(
+    cols = all_of(sig_zico_taxa$Taxon),
+    names_to = "Taxon",
+    values_to = "CLR"
+  ) %>%
+  group_by(Taxon, pain_severity_cat) %>%
+  summarise(
+    Median_CLR = median(CLR, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  left_join(
+    tax_df %>%
+      dplyr::select(Taxon, Genus),
+    by = "Taxon"
+  ) %>%
+  mutate(
+    Genus_clean = ifelse(
+      is.na(Genus) | Genus == "",
+      Taxon,
+      stringr::str_replace_all(Genus, "_", " ")
+    )
+  )
+
+# Convert to matrix
+heat_matrix <- heat_df %>%
+  dplyr::select(
+    Genus_clean,
+    pain_severity_cat,
+    Median_CLR
+  ) %>%
+  pivot_wider(
+    names_from = pain_severity_cat,
+    values_from = Median_CLR
+  )
+
+heat_mat <- as.data.frame(heat_matrix)
+rownames(heat_mat) <- heat_mat$Genus_clean
+heat_mat$Genus_clean <- NULL
+
+heat_mat <- as.matrix(heat_mat)
+
+# Plot heatmap
+breaks <- seq(-1.5, 1.5, length.out = 101)
+
+pheatmap::pheatmap(
+  heat_mat,
+  scale = "row",
+  cluster_rows = TRUE,
+  cluster_cols = FALSE,
+  color = colorRampPalette(c("#2166AC", "white", "#B2182B"))(100),
+  breaks = breaks,
+  fontsize_row = 10,
+  main = "Pain severity-associated taxa",
+  legend_breaks = c(-1.5, -1, 0, 1, 1.5),
+  legend_labels = c(
+    "Lower\n(-1.5)",
+    "-1",
+    "Mean\n(0)",
+    "+1",
+    "Higher\n(+1.5)"
+  )
+)
+
+```
+
+### Boxplots for significant taxa
+
+```{r}
+############################################################
+# Individual boxplots for significant taxa
+############################################################
+
+set.seed(123)
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggpubr)
+library(purrr)
+
+plot_df <- clr_meta %>%
+  dplyr::select(
+    Subject.ID,
+    pain_severity_cat,
+    all_of(sig_zico_taxa$Taxon)
+  ) %>%
+  pivot_longer(
+    cols = all_of(sig_zico_taxa$Taxon),
+    names_to = "Taxon",
+    values_to = "CLR"
+  ) %>%
+  left_join(
+    tax_df %>%
+      dplyr::select(Taxon, Genus),
+    by = "Taxon"
+  ) %>%
+  mutate(
+    Genus_clean = case_when(
+      Genus == "W5053" ~ "Clostridiales Family XI W5053",
+      is.na(Genus) | Genus == "" ~ Taxon,
+      TRUE ~ stringr::str_replace_all(Genus, "_", " ")
+    ),
+    
+    pain_severity_cat = factor(
+      pain_severity_cat,
+      levels = c(
+        "No pain",
+        "Mild pain",
+        "Moderate pain",
+        "Severe pain"
+      ),
+      labels = c(
+        "No pain\n(n = 6)",
+        "Mild pain\n(n = 8)",
+        "Moderate pain\n(n = 7)",
+        "Severe pain\n(n = 9)"
+      )
+    )
+  ) %>%
+  filter(!is.na(pain_severity_cat))
+
+comparisons <- list(
+  c("No pain\n(n = 6)", "Mild pain\n(n = 8)"),
+  c("No pain\n(n = 6)", "Moderate pain\n(n = 7)"),
+  c("No pain\n(n = 6)", "Severe pain\n(n = 9)"),
+  c("Mild pain\n(n = 8)", "Moderate pain\n(n = 7)"),
+  c("Mild pain\n(n = 8)", "Severe pain\n(n = 9)"),
+  c("Moderate pain\n(n = 7)", "Severe pain\n(n = 9)")
+)
+
+############################################################
+# Function for significant comparisons
+############################################################
+
+get_sig_comparisons <- function(df) {
+  
+  res <- purrr::map_dfr(comparisons, function(comp) {
+    
+    temp <- df %>%
+      filter(pain_severity_cat %in% comp) %>%
+      droplevels()
+    
+    if(length(unique(temp$pain_severity_cat)) < 2) {
+      return(NULL)
+    }
+    
+    test <- wilcox.test(CLR ~ pain_severity_cat, data = temp)
+    
+    tibble(
+      group1 = comp[1],
+      group2 = comp[2],
+      p = test$p.value
+    )
+  }) %>%
+    mutate(
+      p.adj = p.adjust(p, method = "fdr"),
+      p.signif = case_when(
+        p.adj <= 0.001 ~ "***",
+        p.adj <= 0.01 ~ "**",
+        p.adj <= 0.05 ~ "*",
+        TRUE ~ "ns"
+      )
+    ) %>%
+    filter(p.adj <= 0.05)
+  
+  return(res)
+}
+
+############################################################
+# Function to generate one plot
+############################################################
+
+make_taxon_plot <- function(genus_name) {
+  
+  df_taxon <- plot_df %>%
+    filter(Genus_clean == genus_name)
+  
+  sig_tests <- get_sig_comparisons(df_taxon)
+  
+  y_max <- max(df_taxon$CLR, na.rm = TRUE)
+  y_min <- min(df_taxon$CLR, na.rm = TRUE)
+  step <- (y_max - y_min) * 0.18
+  scale_y_continuous(
+    expand = expansion(mult = c(0.05, 0.35))
+  )
+  
+  if(nrow(sig_tests) > 0) {
+    sig_tests <- sig_tests %>%
+      mutate(
+        y.position = y_max + step * row_number()
+      )
+  }
+  
+  plot_title <- if(genus_name == "W5053") {
+    bquote(italic("Clostridiales Family XI W5053"))
+  } else {
+    bquote(italic(.(genus_name)))
+  }
+  
+  p <- ggplot(
+    df_taxon,
+    aes(
+      x = pain_severity_cat,
+      y = CLR,
+      fill = pain_severity_cat
+    )
+  ) +
+    geom_boxplot(
+      outlier.shape = NA,
+      alpha = 0.8,
+      width = 0.65
+    ) +
+    geom_jitter(
+      width = 0.12,
+      size = 3,
+      color = "black"
+    ) +
+    stat_pvalue_manual(
+      sig_tests,
+      label = "p.signif",
+      tip.length = 0.01,
+      bracket.size = 0.7,
+      size = 12
+    ) +
+    scale_fill_manual(
+      values = c(
+        "No pain\n(n = 6)" = "grey",
+        "Mild pain\n(n = 8)" = "#FDBB84",
+        "Moderate pain\n(n = 7)" = "#EF6548",
+        "Severe pain\n(n = 9)" = "#990000"
+      ),
+      drop = FALSE
+    ) +
+    theme_classic(base_size = 18) +
+    theme(legend.position = "none",
+          axis.text.x = element_text(angle = 45, hjust = 1, size = 20, color = "black", face = "bold"),
+          axis.text.y = element_text(size = 20, color = "black"),
+          axis.title.x = element_text(size = 18),
+          axis.title.y = element_text(size = 20,  face = "bold"),
+          plot.title = element_text(size = 26, hjust = 0.5, face = "bold"),
+          #plot.subtitle = element_text(size = 18, hjust = 0.5),
+          legend.title = element_text(size = 18),
+          legend.text = element_text(size = 18),
+          legend.margin = margin(0, 0, 0, 0),
+          
+          panel.background = element_rect(fill = "transparent", colour = NA),
+          plot.background = element_rect(fill = "transparent", colour = NA),
+          
+          legend.background = element_blank(),
+          legend.box.background = element_blank(),
+          legend.key = element_blank()
+    ) +
+    labs(
+      title = plot_title,
+      x = NULL,
+      y = "CLR Abundance"
+    )
+  
+  return(p)
+}
+
+############################################################
+# Generate plots
+############################################################
+
+taxon_plots <- purrr::map(
+  unique(plot_df$Genus_clean),
+  make_taxon_plot
+)
+
+
+names(taxon_plots) <- unique(plot_df$Genus_clean)
+taxon_plots$Ezakiella
+taxon_plots$`Clostridiales Family XI W5053`
+```
+
+```{r}
+
+############################################################
+# Save plots
+############################################################
+fig_dir <- "C:/Users/m298096/OneDrive - Mayo Clinic/1-Thesis_Research/1-Manuscripts/Microbiome Manuscript/MKB figs/[CURRENT] Pain plots/Rectal  Plots"
+
+ggsave(
+  filename = "W5053_pain_boxplot.png",
+  plot = taxon_plots[["Clostridiales Family XI W5053"]],
+  path = fig_dir,
+  width = 8,
+  height = 7,
+  units = "in",
+  dpi = 600,
+  bg = "transparent"
+)
+
+ggsave(
+  filename = "W5053_pain_boxplot.pdf",
+  plot = taxon_plots[["Clostridiales Family XI W5053"]],
+  path = fig_dir,
+  width = 8,
+  height = 7,
+  units = "in",
+  device = "pdf",
+  bg = "transparent"
+)
+
+ggsave(
+  filename = "Ezakiella_pain_boxplot.png",
+  plot = taxon_plots$Ezakiella,
+  path = fig_dir,
+  width = 8,
+  height = 7,
+  units = "in",
+  dpi = 600,
+  bg = "transparent"
+)
+
+ggsave(
+  filename = "Ezakiella_pain_boxplot.pdf",
+  plot = taxon_plots$Ezakiella,
+  path = fig_dir,
+  width = 8,
+  height = 7,
+  units = "in",
+  device = "pdf",
+  bg = "transparent"
+)
+```
+
+
+### Fisher's test for cluster based on pain severity
+```{r}
+fisher.test(
+  table(
+    merged_meta_r$Cluster_Aitchison,
+    merged_meta_r$pain_severity
+  )
+)
+
+tab <- table(
+  merged_meta_r$Cluster_Aitchison,
+  merged_meta_r$pain_severity
+)
+
+fisher.test(tab)
+
+pairwise_results <- list()
+
+pain_levels <- levels(merged_meta_r$pain_severity)
+
+for(i in 1:(length(pain_levels)-1)) {
+  for(j in (i+1):length(pain_levels)) {
+    
+    temp <- merged_meta_r %>%
+      filter(
+        pain_severity %in% c(
+          pain_levels[i],
+          pain_levels[j]
+        )
+      )
+    
+    tab <- table(
+      temp$Cluster_Aitchison,
+      temp$pain_severity
+    )
+    
+    res <- fisher.test(tab)
+    
+    pairwise_results[[paste(
+      pain_levels[i],
+      "vs",
+      pain_levels[j]
+    )]] <- res$p.value
+  }
+}
+
+pairwise_results
+
+p.adjust(
+  unlist(pairwise_results),
+  method = "fdr"
+)
+
+```
+
+## Graph cluster counts and Fisher's results
+```{r}
+cluster_counts <- merged_meta_r %>%
+  mutate(
+    pain_severity_plot = case_when(
+      grepl("^No pain", as.character(pain_severity)) ~ "No pain (n = 6)",
+      grepl("^Mild pain", as.character(pain_severity)) ~ "Mild pain (n = 8)",
+      grepl("^Moderate pain", as.character(pain_severity)) ~ "Moderate pain (n = 7)",
+      grepl("^Severe pain", as.character(pain_severity)) ~ "Severe pain (n = 9)",
+      TRUE ~ NA_character_
+    ),
+    pain_severity_plot = factor(
+      pain_severity_plot,
+      levels = c(
+        "No pain (n = 6)",
+        "Mild pain (n = 8)",
+        "Moderate pain (n = 7)",
+        "Severe pain (n = 9)"
+      )
+    ),
+    Cluster_Aitchison = factor(
+      Cluster_Aitchison,
+      levels = c(1, 2, 3),
+      labels = c("Cluster 1", "Cluster 2", "Cluster 3")
+    )
+  ) %>%
+  filter(!is.na(pain_severity_plot)) %>%
+  count(Cluster_Aitchison, pain_severity_plot, .drop = FALSE) %>%
+  group_by(Cluster_Aitchison) %>%
+  mutate(
+    prop = n / sum(n),
+    label = ifelse(n == 0, "", as.character(n))
+  ) %>%
+  ungroup()
+
+p.adjust(
+  unlist(pairwise_results),
+  method = "fdr"
+)
+
+
+cluster_counts <- merged_meta_r %>%
+  mutate(
+    pain_severity_plot = case_when(
+      grepl("^No pain", as.character(pain_severity)) ~ "No pain",
+      grepl("^Mild pain", as.character(pain_severity)) ~ "Mild",
+      grepl("^Moderate pain", as.character(pain_severity)) ~ "Moderate",
+      grepl("^Severe pain", as.character(pain_severity)) ~ "Severe",
+      TRUE ~ NA_character_
+    ),
+    pain_severity_plot = factor(
+      pain_severity_plot,
+      levels = c("No pain", "Mild", "Moderate", "Severe")
+    ),
+    Cluster_Aitchison = factor(
+      Cluster_Aitchison,
+      levels = c(1, 2, 3),
+      labels = c("Cluster 1", "Cluster 2", "Cluster 3")
+    )
+  ) %>%
+  filter(!is.na(pain_severity_plot), !is.na(Cluster_Aitchison)) %>%
+  count(Cluster_Aitchison, pain_severity_plot, .drop = FALSE) %>%
+  mutate(label = ifelse(n == 0, "", as.character(n)))
+
+clusters_pain_counts <- ggplot(
+  cluster_counts,
+  aes(
+    x = Cluster_Aitchison,
+    y = n,
+    fill = pain_severity_plot
+  )
+) +
+  geom_col(width = 0.85, color = "white") +
+  geom_text(
+    aes(label = label),
+    position = position_stack(vjust = 0.5),
+    size = 6,
+    color = "black"
+  ) +
+  scale_fill_manual(
+    values = c(
+      "No pain" = "#737373",
+      "Mild" = "#FDBB84",
+      "Moderate" = "#EF6548",
+      "Severe" = "#990000"
+    ),
+    drop = FALSE
+  ) +
+  scale_y_continuous(
+    breaks = seq(0, 14, by = 2),
+    expand = expansion(mult = c(0, 0.05))
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.text.x = element_text(size = 18, color = "black"),
+    axis.text.y = element_text(size = 18, color = "black"),
+    axis.title.x = element_text(size = 18, face = "bold"),
+    axis.title.y = element_text(size = 20, face = "bold"),
+    legend.title = element_text(size = 18, face = "bold"),
+    legend.text = element_text(size = 16),
+    legend.key = element_blank(),
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    plot.background = element_rect(fill = "transparent", colour = NA)
+  ) +
+  labs(
+    x = NULL,
+    y = "Number of Participants",
+    fill = "Pain Severity"
+  )
+
+clusters_pain_counts
+
+## Add fisher's p-value to the plot
+fisher_p <- fisher.test(
+  table(
+    merged_meta_r$Cluster_Aitchison,
+    merged_meta_r$pain_severity
+  )
+)$p.value
+
+clusters_pain_counts <- clusters_pain_counts +
+  labs(
+    subtitle = bquote("Fisher's Exact " * italic(p) == .(signif(fisher_p, 3)))
+  ) +
+  theme(
+    plot.subtitle = element_text(size = 20, hjust = 0.5, face = "bold")
+  )
+
+clusters_pain_counts
+
+## Pairwise comparisons
+pairwise_df <- tibble::tibble(
+  comparison = names(pairwise_results),
+  p_value = unlist(pairwise_results),
+  fdr = p.adjust(unlist(pairwise_results), method = "fdr")
+) %>%
+  dplyr::mutate(
+    p_label = paste0("p = ", signif(p_value, 3)),
+    fdr_label = paste0("FDR = ", signif(fdr, 3))
+  )
+
+pairwise_df
+
+
+```
+# Save 
+```{r}
+ggsave(
+  filename = "aitch_pain_clusters.png",
+  plot = clusters_pain_counts,
+  path = fig_dir,
+  width = 8,
+  height = 5.5,
+  units = "in",
+  dpi = 600,
+  bg = "transparent"
+)
+
+ggsave(
+  filename = "aitch_pain_clusters.pdf",
+  plot = clusters_pain_counts,
+  path = fig_dir,
+  width = 8,
+  height = 5.5,
+  units = "in",
+  device = "pdf",
+  bg = "transparent"
+)
+```
+
+### Secondary cluster analayses...zicoseq 
+
+```{r, eval =F}
+############################################################
+# Secondary analysis: characterize Aitchison clusters
+# Taxa + predicted functional ecology
+############################################################
+
+library(GUniFrac)
+library(microeco)
+library(phyloseq)
+library(tidyverse)
+library(ggrepel)
+library(pheatmap)
+library(ggpubr)
+
+# Make sure cluster is a factor
+merged_meta_r <- merged_meta_r %>%
+  mutate(
+    Cluster_Aitchison = factor(Cluster_Aitchison)
+  )
+
+############################################################
+# Part 1. ZicoSeq DAA by Aitchison cluster
+############################################################
+
+# Genus-level count matrix
+otu_cluster <- as.data.frame(otu_table(merged_r_genus))
+
+# ZicoSeq expects taxa x samples
+if (!taxa_are_rows(merged_r_genus)) {
+  otu_cluster <- t(otu_cluster)
+}
+
+otu_cluster <- as.matrix(otu_cluster)
+storage.mode(otu_cluster) <- "numeric"
+
+# Match metadata to OTU columns
+meta_cluster <- merged_meta_r %>%
+  filter(
+    Subject.ID %in% colnames(otu_cluster),
+    !is.na(Cluster_Aitchison)
+  ) %>%
+  arrange(match(Subject.ID, colnames(otu_cluster))) %>%
+  as.data.frame()
+
+rownames(meta_cluster) <- meta_cluster$Subject.ID
+
+otu_cluster <- otu_cluster[, meta_cluster$Subject.ID]
+
+# Optional analysis-specific filter
+otu_cluster <- otu_cluster[rowSums(otu_cluster > 0) >= 3, ]
+
+# Checks
+dim(otu_cluster)
+nrow(meta_cluster)
+all(colnames(otu_cluster) == rownames(meta_cluster))
+
+set.seed(123)
+
+zico_cluster <- ZicoSeq(
+  meta.dat = meta_cluster,
+  feature.dat = otu_cluster,
+  grp.name = "Cluster_Aitchison",
+  adj.name = NULL,
+  feature.dat.type = "count",
+  is.winsor = TRUE,
+  outlier.pct = 0.03,
+  winsor.end = "top",
+  is.post.sample = FALSE,
+  link.func = list(function(x) x^0.5),
+  stats.combine.func = max,
+  perm.no = 999,
+  strata = NULL,
+  ref.pct = 0.5,
+  stage.no = 6,
+  excl.pct = 0.2,
+  is.fwer = FALSE,
+  verbose = TRUE,
+  return.feature.dat = TRUE
+)
+
+# Results table
+zico_cluster_results <- data.frame(
+  Taxon = names(zico_cluster$p.raw),
+  p.raw = as.numeric(zico_cluster$p.raw),
+  p.adj.fdr = as.numeric(zico_cluster$p.adj.fdr),
+  R2 = as.numeric(zico_cluster$R2)
+) %>%
+  arrange(p.adj.fdr)
+
+# Add taxonomy
+tax_df_cluster <- as.data.frame(tax_table(merged_r_genus))
+tax_df_cluster$Taxon <- rownames(tax_df_cluster)
+
+zico_cluster_results <- zico_cluster_results %>%
+  left_join(tax_df_cluster, by = "Taxon") %>%
+  mutate(
+    Genus_clean = ifelse(
+      is.na(Genus) | Genus == "",
+      Taxon,
+      stringr::str_replace_all(Genus, "_", " ")
+    ),
+    Genus_clean = case_when(
+      Taxon == "213ebca51a1d1b76ccd1456820b11a96548261a1" ~ "Eggerthellaceae unclassified",
+      Taxon == "d7d0c7358e32837b6121cfd76b27f13f2a1edb75" ~ "Enterobacteriaceae unclassified",
+      TRUE ~ Genus_clean
+    )
+  )
+sig_zico_cluster <- zico_cluster_results %>%
+  filter(p.adj.fdr < 0.05) 
+
+sig_zico_cluster
+
+
+############################################################
+# Part 2. Cluster-defining taxa heatmap
+############################################################
+
+# CLR matrix with original taxon IDs
+clr_cluster <- as.data.frame(clr_mat)
+colnames(clr_cluster) <- taxa_names(merged_r_genus)
+clr_cluster$Subject.ID <- rownames(clr_cluster)
+
+clr_cluster_meta <- clr_cluster %>%
+  left_join(
+    merged_meta_r %>%
+      dplyr::select(Subject.ID, Cluster_Aitchison),
+    by = "Subject.ID"
+  )
+
+############################################################
+# Part 3. Identify which Cluster each sig taxa is highest in
+############################################################
+if (nrow(sig_zico_cluster) > 0) {
+  
+  cluster_taxa_medians <- clr_cluster_meta %>%
+    dplyr::select(
+      Subject.ID,
+      Cluster_Aitchison,
+      all_of(sig_zico_cluster$Taxon)
+    ) %>%
+    pivot_longer(
+      cols = all_of(sig_zico_cluster$Taxon),
+      names_to = "Taxon",
+      values_to = "CLR"
+    ) %>%
+    group_by(Taxon, Cluster_Aitchison) %>%
+    summarise(
+      Median_CLR = median(CLR, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    left_join(
+      tax_df_cluster %>%
+        dplyr::select(Taxon, Genus),
+      by = "Taxon"
+    ) %>%
+    mutate(
+      Genus_clean = ifelse(
+        is.na(Genus) | Genus == "",
+        Taxon,
+        stringr::str_replace_all(Genus, "_", " ")
+      )
+    )
+}
+
+cluster_taxa_direction <- cluster_taxa_medians %>%
+  group_by(Taxon) %>%
+  mutate(
+    Highest_cluster = Cluster_Aitchison[which.max(Median_CLR)],
+    Highest_median_CLR = max(Median_CLR, na.rm = TRUE)
+  ) %>%
+  ungroup() %>%
+  arrange(Highest_cluster, Genus_clean, Cluster_Aitchison)
+
+cluster_taxa_direction
+
+cluster_taxa_summary <- cluster_taxa_medians %>%
+  group_by(Taxon, Genus_clean) %>%
+  slice_max(
+    order_by = Median_CLR,
+    n = 1,
+    with_ties = FALSE
+  ) %>%
+  ungroup() %>%
+  rename(
+    Highest_cluster = Cluster_Aitchison,
+    Highest_median_CLR = Median_CLR
+  ) %>%
+  arrange(Highest_cluster, Genus_clean)
+
+cluster_taxa_summary
+
+############################################################
+# Part 4. Generic DAA volcano plot for clusters
+############################################################
+cluster_taxa_medians <- cluster_taxa_medians %>%
+  dplyr::mutate(
+    Genus_clean = dplyr::case_when(
+      Taxon == "213ebca51a1d1b76ccd1456820b11a96548261a1" ~ "Eggerthellaceae unclassified",
+      Taxon == "d7d0c7358e32837b6121cfd76b27f13f2a1edb75" ~ "Enterobacteriaceae unclassified",
+      TRUE ~ Genus_clean
+    )
+  )
+
+cluster_taxa_medians <- cluster_taxa_medians %>%
+  mutate(
+    Genus_label = case_when(
+      Genus_clean == "Eggerthellaceae unclassified" ~
+        "italic('Eggerthellaceae')~'unclassified'",
+
+      Genus_clean == "Enterobacteriaceae unclassified" ~
+        "italic('Enterobacteriaceae')~'unclassified'",
+
+      TRUE ~ paste0("italic('", Genus_clean, "')")
+    )
+  )
+
+cluster_taxa_plot_df <- cluster_taxa_medians %>%
+  group_by(Taxon, Genus_clean) %>%
+  mutate(
+    Highest_cluster = Cluster_Aitchison[which.max(Median_CLR)]
+  ) %>%
+  ungroup() %>%
+  mutate(
+    Highest_cluster = factor(Highest_cluster),
+    Cluster_Aitchison = factor(Cluster_Aitchison),
+    Genus_clean = forcats::fct_reorder(Genus_clean, as.numeric(Highest_cluster))
+  )
+
+cluster_taxa_plot <- ggplot(
+  cluster_taxa_plot_df,
+  aes(
+    x = Cluster_Aitchison,
+    y = Genus_clean,
+    fill = Median_CLR
+  )
+) +
+  geom_tile(color = "white", linewidth = 0.6) +
+  scale_fill_gradient2(
+    low = "#2166AC",
+    mid = "white",
+    high = "#B2182B",
+    midpoint = 0,
+    name = "Median CLR"
+  ) +
+  scale_y_discrete(
+  labels = function(x) parse(text =
+    cluster_taxa_plot_df$Genus_label[
+      match(x, cluster_taxa_plot_df$Genus_clean)
+    ]
+  )
+) +
+  theme_classic(base_size = 16) +
+  labs(
+    x = "Aitchison cluster",
+    y = NULL,
+    title = "Differentially Abundant Taxa by Cluster",
+    fill = "Median CLR"
+  ) +
+  theme(
+    axis.text.y = element_text(size = 12, color = "black"),
+    axis.text.x = element_text(size = 14),
+    axis.title.x = element_text(size = 16),
+    plot.title = element_text(size = 18, hjust = 0.5, face = "bold"),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 12)
+  )
+cluster_taxa_plot <- cluster_taxa_plot +
+  labs(
+    x = NULL,
+    title = NULL
+  ) +
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(size = 18, color = "black"),
+    axis.text.y = element_text(size = 16, color = "black"),
+    legend.title = element_text(size = 18, face = "bold"),
+    legend.text = element_text(size = 16),
+    legend.key.height = unit(1.2, "cm"),
+    legend.key.width = unit(0.35, "cm"),
+    legend.margin = margin(0, 0, 0, 0),
+    plot.margin = margin(5, 5, 5, 5),
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    plot.background = element_rect(fill = "transparent", colour = NA),
+    legend.background = element_rect(fill = "transparent", colour = NA)
+  )
+cluster_taxa_plot
+
+zico_clusters_df <- zico_cluster_results %>%
+  mutate(
+    neg_log10_fdr = -log10(p.adj.fdr),
+    Significant = ifelse(p.adj.fdr < 0.05, "FDR < 0.05", "Non-significant"),
+    Genus_clean = case_when(
+      Genus == "W5053" ~ "Clostridiales Family XI W5053",
+      Taxon == "213ebca51a1d1b76ccd1456820b11a96548261a1" ~ "Eggerthellaceae unclassified",
+      Taxon == "d7d0c7358e32837b6121cfd76b27f13f2a1edb75" ~ "Enterobacteriaceae unclassified",
+      is.na(Genus) | Genus == "" ~ Taxon,
+      TRUE ~ stringr::str_replace_all(Genus, "_", " ")
+    ),
+    Label = ifelse(
+      p.adj.fdr < 0.05,
+      paste0("italic(\"", Genus_clean, "\")"),
+      NA_character_
+    )
+  )
+
+
+zico_plot_clusters <- ggplot(
+  zico_clusters_df,
+  aes(
+    x = R2,
+    y = neg_log10_fdr,
+    color = Significant
+  )
+) +
+  geom_point(size = 3, alpha = 0.8) +
+  geom_hline(
+    yintercept = -log10(0.05),
+    linetype = "dashed",
+    color = "black"
+  ) +
+  geom_text_repel(
+    aes(label = Label),
+    size = 7,
+    parse = TRUE,
+    max.overlaps = Inf,
+    box.padding = 1.5,
+    point.padding = 1.2,
+    force = 20,
+    force_pull = 0.02,
+    nudge_y = 0.22,
+    max.iter = 50000,
+    max.time = 10,
+    min.segment.length = 0,
+    segment.color = "grey50",
+    segment.size = 0.6,
+    direction = "both",
+    na.rm = TRUE,
+    show.legend = FALSE
+  ) +
+  scale_color_manual(
+    values = c(
+      "Non-significant" = "grey75",
+      "FDR < 0.05" = "#cb181d"
+    )
+  ) +
+  scale_y_continuous(
+  limits = c(0, 4),
+  expand = expansion(mult = c(0.02, 0.2))
+) +
+  #scale_x_continuous(
+  #limits = c(0, 0.6),
+  #expand = expansion(mult = c(0.02, 0.05))
+#) #+
+  theme_classic(base_size = 16) +
+  theme(
+    axis.text.x = element_text(size = 18, color = "black"),
+    axis.text.y = element_text(size = 18, color = "black"),
+    axis.title.x = element_text(size = 18, face = "bold"),
+    axis.title.y = element_text(size = 18, face = "bold"),
+    #plot.title = element_text(size = 22, hjust = 0.5),
+    plot.subtitle = element_text(size = 24, hjust = 0.5),
+    legend.title = element_text(size = 18),
+    legend.text = element_text(size = 18),
+    legend.margin = margin(0, 0, 0, 0),
+    
+    panel.background = element_rect(fill = "transparent", colour = NA),
+    plot.background = element_rect(fill = "transparent", colour = NA),
+    
+    legend.background = element_blank(),
+    legend.box.background = element_blank(),
+    legend.key = element_blank()
+  ) +
+  labs(
+    x = expression(R^2),
+    y = expression(-log[10]("FDR")),
+    color = ""
+  )
+
+
+zico_plot_clusters
+```
+
+```{r}
+ggsave(
+  filename = "cluster_taxa_plot.pdf",
+  plot = cluster_taxa_plot,
+  path = fig_dir,
+  width = 9,
+  height = 6.5,
+  units = "in",
+  device = "pdf",
+  bg = "transparent"
+)
+
+ggsave(
+  filename = "zico_plot_clusters.pdf",
+  plot = zico_plot_clusters,
+  path = fig_dir,
+  width = 12,
+  height = 8,
+  units = "in",
+  device = "pdf",
+  bg = "transparent"
+)
+
+```
+
+```{r}
+############################################################
+# 5. Pairwise comparisons between clusters for significant taxa
+############################################################
+
+cluster_taxa_pairwise <- cluster_taxa_plot_df %>%
+  dplyr::select(
+    Taxon,
+    Genus_clean
+  ) %>%
+  dplyr::distinct() %>%
+  purrr::pmap_dfr(
+    function(Taxon, Genus_clean) {
+      
+      temp <- clr_cluster_meta %>%
+        dplyr::select(
+          Subject.ID,
+          Cluster_Aitchison,
+          all_of(Taxon)
+        ) %>%
+        dplyr::rename(
+          CLR = all_of(Taxon)
+        ) %>%
+        dplyr::filter(
+          !is.na(Cluster_Aitchison),
+          !is.na(CLR)
+        )
+      
+      test <- pairwise.wilcox.test(
+        x = temp$CLR,
+        g = temp$Cluster_Aitchison,
+        p.adjust.method = "fdr"
+      )
+      
+      as.data.frame(as.table(test$p.value)) %>%
+        dplyr::filter(!is.na(Freq)) %>%
+        dplyr::mutate(
+          Taxon = Taxon,
+          Genus_clean = Genus_clean,
+          Comparison = paste(Var1, "vs", Var2),
+          Pairwise_FDR = Freq
+        ) %>%
+        dplyr::select(
+          Taxon,
+          Genus_clean,
+          Comparison,
+          Pairwise_FDR
+        )
+    }
+  ) %>%
+  dplyr::arrange(
+    Genus_clean,
+    Pairwise_FDR
+  )
+
+cluster_taxa_pairwise
+
+cluster_taxa_pairwise_direction <- cluster_taxa_pairwise %>%
+  tidyr::separate(
+    Comparison,
+    into = c("Cluster_A", "Cluster_B"),
+    sep = " vs ",
+    remove = FALSE
+  ) %>%
+  dplyr::left_join(
+    cluster_taxa_medians %>%
+      dplyr::rename(
+        Cluster_A = Cluster_Aitchison,
+        Median_CLR_A = Median_CLR
+      ) %>%
+      dplyr::select(Taxon, Cluster_A, Median_CLR_A),
+    by = c("Taxon", "Cluster_A")
+  ) %>%
+  dplyr::left_join(
+    cluster_taxa_medians %>%
+      dplyr::rename(
+        Cluster_B = Cluster_Aitchison,
+        Median_CLR_B = Median_CLR
+      ) %>%
+      dplyr::select(Taxon, Cluster_B, Median_CLR_B),
+    by = c("Taxon", "Cluster_B")
+  ) %>%
+  dplyr::mutate(
+    Higher_cluster = dplyr::case_when(
+      Median_CLR_A > Median_CLR_B ~ Cluster_A,
+      Median_CLR_B > Median_CLR_A ~ Cluster_B,
+      TRUE ~ "Tie"
+    )
+  ) %>%
+  dplyr::arrange(
+    Genus_clean,
+    Pairwise_FDR
+  )
+
+cluster_taxa_pairwise_direction
+
+cluster_taxa_pairwise_direction %>%
+  dplyr::filter(Pairwise_FDR < 0.05)
+
+
+
+
+############################################################
+# 6. Plot cluster pairwise comparisons for significant taxa
+############################################################
+
+cluster_taxa_boxplot_df <- clr_cluster_meta %>%
+  dplyr::select(
+    Subject.ID,
+    Cluster_Aitchison,
+    all_of(unique(sig_zico_cluster$Taxon))
+  ) %>%
+  tidyr::pivot_longer(
+    cols = all_of(unique(sig_zico_cluster$Taxon)),
+    names_to = "Taxon",
+    values_to = "CLR"
+  ) %>%
+  dplyr::left_join(
+    sig_zico_cluster %>%
+      dplyr::select(Taxon, Genus_clean),
+    by = "Taxon"
+  ) %>%
+  dplyr::filter(
+    !is.na(Cluster_Aitchison),
+    !is.na(CLR)
+  ) %>%
+  dplyr::mutate(
+    Cluster_Aitchison = factor(
+      Cluster_Aitchison,
+      levels = c("1", "2", "3")
+    )
+  )
+
+
+plot_cluster_taxon <- function(taxon_name) {
+  
+  temp_plot <- cluster_taxa_boxplot_df %>%
+    dplyr::filter(Genus_clean == taxon_name)
+  
+  temp_stats <- cluster_taxa_pairwise_direction %>%
+    dplyr::filter(
+      Genus_clean == taxon_name,
+      Pairwise_FDR < 0.05
+    ) %>%
+    dplyr::mutate(
+      group1 = Cluster_A,
+      group2 = Cluster_B,
+      label = dplyr::case_when(
+        Pairwise_FDR < 0.001 ~ "***",
+        Pairwise_FDR < 0.01 ~ "**",
+        Pairwise_FDR < 0.05 ~ "*",
+        TRUE ~ "ns"
+      ),
+      y.position = max(temp_plot$CLR, na.rm = TRUE) +
+        dplyr::row_number() * 0.8
+    )
+  
+  ggplot(
+    temp_plot,
+    aes(
+      x = Cluster_Aitchison,
+      y = CLR,
+      fill = Cluster_Aitchison
+    )
+  ) +
+    geom_boxplot(
+      width = 0.65,
+      outlier.shape = NA,
+      color = "black",
+      linewidth = 0.8
+    ) +
+    geom_jitter(
+      width = 0.12,
+      size = 3,
+      color = "black",
+      alpha = 0.9
+    ) +
+    ggpubr::stat_pvalue_manual(
+      temp_stats,
+      label = "label",
+      y.position = "y.position",
+      tip.length = 0.01,
+      bracket.size = 0.8,
+      size = 12,
+      face = "bold"
+    ) +
+    scale_fill_manual(
+      values = c(
+        "1" = "#9E2F2F",
+        "2" = "#FDBB84",
+        "3" = "#CB181D"
+      )
+    ) +
+    theme_classic(base_size = 18) +
+    labs(
+      x = "Aitchison Cluster",
+      y = "CLR Abundance",
+      title = taxon_name
+    ) +
+    theme(
+      plot.title = element_text(
+        face = "italic",
+        size = 26,
+        hjust = 0.5
+      ),
+      axis.text.x = element_text(
+        size = 18
+      ),
+      axis.text.y = element_text(
+        size = 18
+      ),
+      axis.title.x = element_text(size = 22, face = "bold"),
+      axis.title.y = element_text(size = 22, face = "bold"),
+      legend.position = "none",
+      panel.background = element_rect(fill = "transparent", colour = NA),
+      plot.background = element_rect(fill = "transparent", colour = NA)
+  )
+    
+}
+
+ezakiella_plot <- plot_cluster_taxon("Ezakiella")
+ezakiella_plot
+S5_plot <- plot_cluster_taxon("S5-A14a")
+S5_plot
+pepto_plot <- plot_cluster_taxon("Peptoniphilus")
+pepto_plot
+peptostrepto_plot <- plot_cluster_taxon("Peptostreptococcus")
+peptostrepto_plot
+
+
+plot_cluster_taxon("Peptostreptococcus")
+plot_cluster_taxon("Ruminiclostridium 6")
+plot_cluster_taxon("Intestinibacter")
+plot_cluster_taxon("Sellimonas")
+plot_cluster_taxon("Eggerthellaceae unclassified")
+plot_cluster_taxon("Enterobacteriaceae unclassified")
+plot_cluster_taxon("Adlercreutzia")
+plot_cluster_taxon("Anaerosporobacter")
+plot_cluster_taxon("Christensenellaceae R-7 group")
+plot_cluster_taxon("Lachnoclostridium")
+plot_cluster_taxon("Peptoniphilus")
+plot_cluster_taxon("Ruminococcaceae UCG-002")
+plot_cluster_taxon("Ruminococcus 1")
+plot_cluster_taxon("Sutterella")
+
+```
+
+
+## Save significant taxa
+```{r}
+ggsave(
+  filename = "ezakiella_plot.pdf",
+  plot = ezakiella_plot,
+  path = fig_dir,
+  width = 8,
+  height = 6,
+  units = "in",
+  device = "pdf",
+  bg = "transparent"
+)
+
+ggsave(
+  filename = "S5A14a_plot.pdf",
+  plot = S5_plot,
+  path = fig_dir,
+  width = 8,
+  height = 6,
+  units = "in",
+  device = "pdf",
+  bg = "transparent"
+)
+
+
+ggsave(
+  filename = "pepto_plot.pdf",
+  plot = pepto_plot,
+  path = fig_dir,
+  width = 8,
+  height = 6,
+  units = "in",
+  device = "pdf",
+  bg = "transparent"
+)
+
+ggsave(
+  filename = "peptostrepto_plot.pdf",
+  plot = peptostrepto_plot,
+  path = fig_dir,
+  width = 8,
+  height = 6,
+  units = "in",
+  device = "pdf",
+  bg = "transparent"
+)
+```
+
+### Network analyses
+
+```{r}
+library(SpiecEasi)
+set.seed(123)
+#get counts
+sparcc_tab = merged_r |> tax_glom(taxrank = "Genus") |> tax_filter(min_prevalence = 0.2) #|> tax_select("unclassified", deselect = T)
+
+sparcc_counts = otu_table(sparcc_tab)
+sparcc_ra = sparcc_counts / rowSums(sparcc_counts) #rel abundance
+
+#run sparcc
+sparcc_res = sparcc(sparcc_ra)
+
+#rename
+rownames(sparcc_res$Cor) = colnames(sparcc_counts)
+colnames(sparcc_res$Cor) = colnames(sparcc_counts)
+rownames(sparcc_res$Cov) = colnames(sparcc_counts)
+colnames(sparcc_res$Cov) = colnames(sparcc_counts)
+
+sparcc_cor = sparcc_res$Cor
+
+#re rename
+sum(rownames(sparcc_cor) != rownames(tax_table(sparcc_tab))) #0 means names match
+rownames(sparcc_cor) = tax_table(sparcc_tab)[,"Genus"]
+colnames(sparcc_cor) = tax_table(sparcc_tab)[,"Genus"]
+
+```
+
+
+```{r}
+get_lower_tri<-function(cormat){
+  cormat[upper.tri(cormat)] <- NA
+  return(cormat)
+}
+# Get upper triangle of the correlation matrix
+get_upper_tri <- function(cormat){
+  cormat[lower.tri(cormat)]<- NA
+  return(cormat)
+}
+
+reorder_cormat <- function(cormat){
+  # Use correlation between variables as distance
+  dd <- as.dist((1-cormat)/2)
+  hc <- hclust(dd)
+  cormat <-cormat[hc$order, hc$order]
+}
+
+reorder_cor_and_p <- function(cormat, pmat){
+  dd <- as.dist((1-cormat)/2)
+  hc <- hclust(dd)
+  cormat <-cormat[hc$order, hc$order]
+  pmat <- pmat[hc$order, hc$order]
+  list(r = cormat, p = pmat)
+}
+
+```
+
+
+#### CLR and spearman correlations on pain subset
+
+Some taxa pairs looked nonlinear, so I switched to spearman.
+
+```{r}
+library(psych) #remotes::install_version("psych", version = "2.5.3")
+
+set.seed(123)
+#get counts
+sparcc_tab = merged_r |> tax_glom(taxrank = "Genus") |> tax_filter(min_prevalence = 0.2) #|> tax_select("unclassified", deselect = T)
+
+sparcc_counts = otu_table(sparcc_tab)
+sparcc_ra = sparcc_counts / rowSums(sparcc_counts) #rel abundance
+
+
+
+#plot some rels to check assumptions
+dfClr = as.data.frame(clr(sparcc_counts + 1))
+subs = dfClr[, sample(colnames(dfClr), 10)]
+pairs(subs)
+
+
+MtxClr <- as.matrix(clr(sparcc_counts))
+
+
+spearCorTestClr <- corr.test(MtxClr, method = "spearman", adjust = "none")
+spearCorClr <- spearCorTestClr$r
+spearPClr <- spearCorTestClr$p
+
+
+sum(rownames(spearCorClr) != rownames(tax_table(sparcc_tab))) #0 means names match
+
+# must comment out this renaming block to determine which asvs are unclassified and significant
+rownames(spearCorClr) = tax_table(sparcc_tab)[,"Genus"]
+colnames(spearCorClr) = tax_table(sparcc_tab)[,"Genus"]
+
+rownames(spearPClr) = tax_table(sparcc_tab)[,"Genus"]
+colnames(spearPClr) = tax_table(sparcc_tab)[,"Genus"]
+
+
+reordered_all_Clr <- reorder_cor_and_p(spearCorClr, spearPClr)
+reordered_spearCor_Clr <- reordered_all_Clr$r
+reordered_spearP_Clr <- reordered_all_Clr$p
+
+
+spearCor_processed_Clr <- reordered_spearCor_Clr  %>% get_upper_tri() %>% reshape2::melt() %>% na.omit() %>% dplyr::rename(rho = value)
+spearP_processed_Clr <- reordered_spearP_Clr  %>% get_upper_tri() %>% reshape2::melt() %>% na.omit() %>% dplyr::rename(p = value)
+
+# join the two data frames
+
+sum(spearCor_processed_Clr$Var1 != spearP_processed_Clr$Var1)
+sum(spearCor_processed_Clr$Var2 != spearP_processed_Clr$Var2)
+
+
+spearRhoP_Clr <- cbind(spearCor_processed_Clr, p=spearP_processed_Clr$p) %>%
+  # # remove self correlations
+  filter(Var1 != Var2) %>% 
+  # calculate the false discovery rate to adjust for multiple p values
+  mutate(fdr = p.adjust(p, method = "BH"))
+
+
+hist(spearRhoP_Clr$p)
+```
+
+```{r}
+fdrThresh = 0.05
+
+spearOkP_Clr <- spearRhoP_Clr %>% filter(fdr < fdrThresh) 
+
+spearRhoPClr_plot <- spearRhoP_Clr %>% ggplot(aes(x = Var2, y = Var1, fill = rho)) + 
+  geom_tile() + 
+  scale_fill_gradient2() + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) + 
+  geom_point(data = spearOkP_Clr, shape = 1)
+
+spearRhoPClr_plot
+```
+
+
+Trying to visualize just the significant results.
+```{r}
+library(igraph)
+library(ggraph)
+#unmodified plot
+edges <- spearOkP_Clr
+
+g <- graph_from_data_frame(edges, directed = FALSE)
+
+
+degAll <- igraph::degree(g, v = igraph::V(g), mode = "all")
+betAll <- igraph::betweenness(g, v = igraph::V(g), directed = FALSE) / (((igraph::vcount(g) - 1) * (igraph::vcount(g)-2)) / 2)
+betAll.norm <- (betAll - min(betAll))/(max(betAll) - min(betAll))
+rm(betAll)
+
+dsAll <- igraph::similarity.dice(g, vids = igraph::V(g), mode = "all")
+
+g <- igraph::set.vertex.attribute(g, "deg", index = igraph::V(g), value = degAll)
+g <- igraph::set.vertex.attribute(g, "bet", index = igraph::V(g), value = betAll.norm)
+
+
+deg <- igraph::degree(g)
+bet <- igraph::betweenness(g, directed = F)
+
+ggraph(g, layout = "kk") +
+  geom_edge_link(aes(width = abs(rho), color = rho > 0), alpha = 0.8) +
+  geom_node_point(size = log2(deg+1)+1) +
+  geom_node_text(aes(label = name), repel = TRUE, size = 4) +
+  scale_edge_width(range = c(0.5, 2.5)) +
+  scale_edge_color_manual(values = c("TRUE" = "steelblue", "FALSE" = "firebrick")) +
+  theme_void()
+
+
+
+
+ggraph(g, layout = "kk") +
+  geom_edge_link(
+    aes(width = abs(rho), color = rho > 0),
+    alpha = 0.4
+  ) +
+  geom_node_point(size = 2, color = "grey") +
+  # geom_node_label(
+  #   aes(label = name),
+  #   fill = "white",
+  #   color = "black",
+  #   size = 3.5,
+  #   repel = TRUE,
+  #   label.padding = unit(0.15, "lines"),
+  #   label.r = unit(0.1, "lines"),
+  #   label.size = 0.25
+  # ) +
+  geom_node_label(
+    aes(label = name, fill = deg),
+    color = "white",
+    repel = TRUE,
+    size = 3.5,
+    label.size = 0.25
+  ) +
+  scale_fill_viridis_c(option = "magma", end = 0.9) +
+  scale_edge_width(range = c(0.5, 2.5)) +
+  scale_edge_color_manual(
+    values = c("TRUE" = "steelblue", "FALSE" = "firebrick")
+  ) +
+  theme_void()
+```
+
+
+```{r}
+edges <- spearOkP_Clr
+
+g <- graph_from_data_frame(edges, directed = FALSE)
+
+
+degAll <- igraph::degree(g, v = igraph::V(g), mode = "all")
+betAll <- igraph::betweenness(g, v = igraph::V(g), directed = FALSE) / (((igraph::vcount(g) - 1) * (igraph::vcount(g)-2)) / 2)
+betAll.norm <- (betAll - min(betAll))/(max(betAll) - min(betAll))
+rm(betAll)
+
+dsAll <- igraph::similarity.dice(g, vids = igraph::V(g), mode = "all")
+
+g <- igraph::set.vertex.attribute(g, "deg", index = igraph::V(g), value = degAll)
+g <- igraph::set.vertex.attribute(g, "bet", index = igraph::V(g), value = betAll.norm)
+
+
+deg <- igraph::degree(g)
+bet <- igraph::betweenness(g, directed = F)
+
+#renaming
+#"CAG-56"
+as.data.frame(tax_table(rare_r))[grepl("CAG-56", as.data.frame(tax_table(rare_r))$Genus), ]
+as.data.frame(tax_table(rare_r))["f247d6391a08e1c052517539c487d0864a7d9ca9",]
+
+V(g)$name[V(g)$name == "CAG-56"] <- "Lachnospiraceae CAG-56"
+
+#"UBA1819"
+as.data.frame(tax_table(rare_r))[grepl("UBA1819", as.data.frame(tax_table(rare_r))$Genus), ]
+as.data.frame(tax_table(rare_r))["189345b67bd77229c8027462d9081974e7bd252c",]
+
+V(g)$name[V(g)$name == "UBA1819"] <- "Ruminococcaceae UBA1819"
+
+#"DTU089"
+as.data.frame(tax_table(rare_r))[grepl("DTU089", as.data.frame(tax_table(rare_r))$Genus), ]
+as.data.frame(tax_table(rare_r))["2dbd721f8a6f7678c32638f76877db3fbda70c51",]
+
+V(g)$name[V(g)$name == "DTU089"] <- "Ruminococcaceae DTU089"
+
+#"unclassified"
+
+# reformat Genus text as follows:
+# 1. Replace _ → space
+# 2. If two parts:
+# --First word (family like Ruminococcaceae) → NOT italic
+# --Everything after → italic
+# 3. If a trailing standalone number → keep number NOT italic
+# 4. Otherwise (single genus like Prevotella, UBA1819) → fully italicunderscores with spaces + build italic labels
+
+label_clean <- gsub("_", " ", V(g)$name)
+
+make_label_expr <- function(x) {
+  if (tolower(x) == "unclassified" ||
+      x %in% c("Unclassified Christensenellaceae",
+               "Unclassified Rhodospirillales")) {
+    paste0("'", x, "'")
+  } else {
+    paste0("italic('", x, "')")
+  }
+}
+
+V(g)$label_expr <- sapply(label_clean, make_label_expr)
+#   # case 0: unclassified → NOT italic
+#   if (tolower(x) == "unclassified") {
+#     return(paste0("'", x, "'"))
+#   }
+#   
+#   # case 1: trailing standalone number, e.g. Prevotella 7
+#   if (grepl("^[A-Za-z]+ [0-9]+$", x)) {
+#     return(sub("^(.*) ([0-9]+)$", "italic('\\1')~'\\2'", x))
+#   }
+#   
+#   # case 2: Family XIII AD3011 group
+#   if (grepl("^Family [A-Za-z0-9]+ ", x)) {
+#     first <- sub("^(Family [A-Za-z0-9]+) (.*)$", "\\1", x)
+#     rest  <- sub("^(Family [A-Za-z0-9]+) (.*)$", "\\2", x)
+#     return(paste0("'", first, "'~italic('", rest, "')"))
+#   }
+#   
+#   # case 3: standard family + group (one-word family)
+#   if (grepl(" ", x)) {
+#     first <- sub("^([^ ]+) (.*)$", "\\1", x)
+#     rest  <- sub("^([^ ]+) (.*)$", "\\2", x)
+#     return(paste0("'", first, "'~italic('", rest, "')"))
+#   }
+#   
+#   # case 4: single word
+#   paste0("italic('", x, "')")
+# }
+
+V(g)$label_expr <- sapply(label_clean, make_label_expr)
+
+ggraph(g, layout = "kk") +
+  geom_edge_link(
+    aes(width = abs(rho), color = rho > 0),
+    alpha = 0.4
+  ) +
+  geom_node_point(size = 2, color = "grey") +
+  geom_node_label(
+    aes(label = label_expr, fill = deg),
+    parse = TRUE,
+    color = "white",
+    repel = TRUE,
+    max.overlaps = Inf,
+    size = 3.5,
+    label.size = 0.25
+  ) +
+  scale_fill_viridis_c(
+    name = "Degree",              # rename deg
+    option = "magma",
+    end = 0.9
+  ) +
+  scale_edge_width(
+    name = "Magnitude",           # rename abs(rho)
+    range = c(0.5, 2.5)
+  ) +
+  scale_edge_color_manual(
+    name = "Correlation",         # rename rho > 0
+    values = c("TRUE" = "steelblue", "FALSE" = "firebrick"),
+    labels = c("FALSE" = "Negative", "TRUE" = "Positive")  # relabel values
+  ) +
+  theme_void() +
+  theme(
+    legend.title = element_text(size = 10),
+    legend.text  = element_text(size = 9)
+  )
+```
