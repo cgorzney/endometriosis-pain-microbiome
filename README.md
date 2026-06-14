@@ -10,10 +10,10 @@ Contains de-identified data required to reproduce analyses.
 
 **scripts/**
 
-Contains R Markdown and R scripts used to generate all analyses, figures, and statistical results presented in the manuscript. 
+Contains R Markdown and R scripts used to generate all analyses, figures, and statistical results presented in the manuscript. Subfolders (endometriosis, pain, sensitivity, and severity) are separated by analysis type and contain the corresponding rectal and vaginal scripts used to generate data for each comparison. 
 
 # Reproducibility
-The provided scripts were developed in R. Users may need to modify local file paths depending on where repository files are stored on their systems. All required de-identified data files are inluded in the data directory.
+The provided scripts were developed in R. Users may need to modify local file paths depending on where repository files are stored on their systems. All required de-identified data files are included in the data directory.
 
 Analyses were performed using the package versions specified within the scripts. Users are encouraged to review package requirements before reproducing analyses. 
 
@@ -22,6 +22,9 @@ De-identified metadata, processed microbiome data, and analysis scripts are publ
 
 # Repository Contributions
 **- Cameron A Gorzney (CAG):** Repository development and maintenance, data curation, analytical code development, statistical analyses, figure generation, and reproducibility documentation.
-**- Raunak Vijayakar (RV):** Analytical code development, statistical analyses, figure generation, and reproducibility documentation
-**- Stephen Johnson (SJ):** Analytical code development and statistical analyses
+
+**- Raunak Vijayakar (RV):** Analytical code development, statistical analyses, figure generation, and reproducibility documentation.
+
+**- Stephen Johnson (SJ):** Analytical code development and statistical analyses.
+
 **- Michelle Bland (MB):** Code modifications for sample relabeling and figure preparation. 
