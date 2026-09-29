@@ -1,6 +1,6 @@
 ---
 title: "endo_rectal_v9_severity_final"
-author: "Cameron A. Gorzney, Stephen Johnson, Raunak Vijayakar, Michelle Bland"
+author: "Cameron A. Gorzney, Stephen Johnson, Raunak Vijayakar, Michelle K. Bland"
 date: "`r Sys.Date()`"
 output: html_document
 ---
@@ -12,48 +12,27 @@ knitr::opts_chunk$set(echo = TRUE)
 ## Load libraries
 
 ```{r}
-###r version 4.3.2
-
-# # Install specific Bioconductor version
-# install.packages("BiocManager")
-# 
-# BiocManager::install(version = "3.17")
-# 
-# # Then install packages
-# BiocManager::install(c("phyloseq", "microbiome"))
-```
-
-
-```{r}
-# packageVersion("")
-library(vegan) #remotes::install_version("vegan", version = "2.6-10")
+library(vegan)
 library(ggrepel)
-library(readxl) #remotes::install_version("readxl", version = "1.4.5")  
-library(phyloseq) #see above
-library(ggplot2) #remotes::install_version("ggplot2", version = "4.0.0")  
-library(hrbrthemes) #remotes::install_version("hrbrthemes", version = "0.8.7")  
-library(ggsci) #remotes::install_version("ggsci", version = "3.2.0")  
-library(dplyr) #remotes::install_version("dplyr", version = "1.1.4")  
-library(microViz) #see below #needed to install "ggiraph" and "ComplexHeatmap"
-# install.packages(
-#   "microViz",
-#   repos = c(davidbarnett = "https://david-barnett.r-universe.dev", getOption("repos"))
-# )
-library(microbiome) #see above
-library(MicrobiomeStat) #remotes::install_version("MicrobiomeStat", version = "1.0")  
-library(GUniFrac) #remotes::install_version("GUniFrac", version = "1.8")
-library(picante) #remotes::install_version("picante", version = "1.8.2")
-library(ggtext) #remotes::install_version("ggtext", version = "2.6-10")
+library(readxl)
+library(phyloseq)
+library(ggplot2)
+library(hrbrthemes)
+library(ggsci)
+library(dplyr)  
+library(microViz)
+library(microbiome)
+library(MicrobiomeStat)
+library(GUniFrac)
+library(picante)
+library(ggtext)
 library(tidyr)
 library(purrr)
 ```
 
-## Process samples--update paths where appropriate
+## Process samples
 
 ```{r}
-
-
-
 setwd()
 
 phylo = readRDS("data/Phylo_public.rds")
@@ -62,9 +41,8 @@ meta = samdat_tbl(phylo)
 #look at metadata
 summarize_phyloseq(phylo)
 
-table(meta$Source) #I thought this was a binary variable? We'll use only vaginal and rectal
-table(meta$Plate, meta$case_control) #maybe include plate as covariate in models?
-
+table(meta$Source)
+table(meta$Plate, meta$case_control)
 ```
 
 Add sample library size.
@@ -95,17 +73,14 @@ unique(meta_r$Subject.ID)
 
 colSums(table(meta_r$Subject.ID, meta_r$case_control) != 0) #check sample size
 
-#list the subjects who were lost after filtering for amplification
+# List the subjects who were lost after filtering for amplification
 unique(temp$Subject.ID[!(temp$Subject.ID %in% meta_r$Subject.ID)])
-
 ```
 
 Merge and filter.
 
 ```{r}
 merged_r = merge_samples(phylo_r, "subject", fun = sum)
-# We use the sum function here instead of mean to get correct lib_size.
-# The other numeric metadata are completely wrecked, as they would be with any function.
 
 # Keep subject IDs from the merged phyloseq object
 sample_data(merged_r)$Subject.ID = sample_names(merged_r)
@@ -113,7 +88,6 @@ sample_data(merged_r)$Subject.ID = sample_names(merged_r)
 # Add corrected patient demographics metadata
 newdata = read_xlsx(
  "data/Newdata_endo_pain.xlsx",col_names = T, sheet =1)
-
 
 splits = strsplit(newdata$`Study ID`, split = "-")
 splits = lapply(splits, head, 2)
@@ -161,8 +135,7 @@ newdata = newdata |>
 
 merged_r = ps_join(merged_r, newdata, by = "Subject.ID", type = "left")
 
-
-# Number of unique participants with BOTH microbiome + pain data
+# Number of unique participants with both microbiome + pain data
 n_distinct(sample_data(merged_r)$Subject.ID)
 
 # Check that corrected demographics are still present after join
@@ -191,18 +164,17 @@ merged_meta_r$Endosalpingiosis_new = as.factor(merged_meta_r$Endosalpingiosis_ne
 merged_meta_r$Adenomyosis_new = as.factor(merged_meta_r$Adenomyosis_new)
 merged_meta_r$abnormal_bleeding_new = as.factor(merged_meta_r$abnormal_bleeding_new)
 
-
-#check for library size confounding
+# Check for library size confounding
 summary(merged_meta_r$lib_size)
 hist(merged_meta_r$lib_size)
 boxplot(merged_meta_r$lib_size ~ merged_meta_r$case_control_new, notch = F)
 wilcox.test(merged_meta_r$lib_size ~ merged_meta_r$case_control_new)
 
-#rarefy
+# Rarefy
 set.seed(123)
-rare_r = rarefy_even_depth(merged_r, replace = F) #rarefy to min depth or 2k, whichever greater
-
+rare_r = rarefy_even_depth(merged_r, replace = F) # Rarefy to min depth or 2k, whichever greater
 ```
+
 ### Checking matched samples
 ```{r}
 # Rectal source only
@@ -371,7 +343,6 @@ continuous_pvals
 #unmodified plot
 rare_r = rare_r %>% tax_fix(unknowns = c("unclassified"))
 
-
 sample_data(rare_r)$Subject.ID <- sample_names(rare_r)
 
 sample_data(rare_r)$Severity_new <- merged_meta_r$Severity_new[
@@ -429,20 +400,7 @@ bar <- rare_r_severity %>%
 bar
 ```
 
-```{r, eval=FALSE, include=FALSE}
-#understanding rare_r object
-# rare_r
-# str(otu_table(rare_r))
-# tax_table(rare_r)
-```
-
 ```{r}
-#Relabel Genus legend for RA plot below
-
-# rare_r = rare_r %>% tax_fix(unknowns = c("unclassified"))
-
-# str(as.data.frame(tax_table(rare_r)))
-
 # Re-add original Severity_new from merged metadata
 sample_data(rare_r)$Subject.ID <- sample_names(rare_r)
 
@@ -485,7 +443,8 @@ sample_data(rare_r_severity)$Severity_plot <- factor(
 table(sample_data(rare_r_severity)$Severity_plot, useNA = "ifany")
 
 table(sample_data(rare_r)$Severity_new, useNA = "ifany")
-#"Lachnospiraceae Family"
+
+# "Lachnospiraceae Family"
 as.data.frame(tax_table(rare_r_severity))[grepl("Lachnospiraceae Family", as.data.frame(tax_table(rare_r_severity))$Genus), ]
 as.data.frame(tax_table(rare_r_severity))["8b895a81f5e2cfc8d27e7a8e3bbb44d61555aa77",]
 
@@ -493,7 +452,7 @@ Lachnospiraceae_Family_tax <- as.data.frame(tax_table(rare_r_severity), stringsA
 Lachnospiraceae_Family_tax$Genus[Lachnospiraceae_Family_tax$Genus == "Lachnospiraceae Family"] <- "Lachnospiraceae Unclassified"
 tax_table(rare_r_severity) <- as.matrix(Lachnospiraceae_Family_tax)
 
-#"Ruminococcaceae Family"
+# "Ruminococcaceae Family"
 as.data.frame(tax_table(rare_r_severity))[grepl("Ruminococcaceae Family", as.data.frame(tax_table(rare_r_severity))$Genus), ]
 as.data.frame(tax_table(rare_r_severity))["5bfb7d856a0aa36bab5f1f102c34b7ac247b9a1b",]
 
@@ -501,15 +460,13 @@ Ruminococcaceae_Family_tax <- as.data.frame(tax_table(rare_r_severity), stringsA
 Ruminococcaceae_Family_tax$Genus[Ruminococcaceae_Family_tax$Genus == "Ruminococcaceae Family"] <- "Ruminococcaceae Unclassified"
 tax_table(rare_r_severity) <- as.matrix(Ruminococcaceae_Family_tax)
 
-#"UBA1819"
+# "UBA1819"
 as.data.frame(tax_table(rare_r_severity))[grepl("UBA1819", as.data.frame(tax_table(rare_r_severity))$Genus), ]
 as.data.frame(tax_table(rare_r_severity))["189345b67bd77229c8027462d9081974e7bd252c",]
 
 UBA1819_tax <- as.data.frame(tax_table(rare_r_severity), stringsAsFactors = FALSE)
 UBA1819_tax$Genus[UBA1819_tax$Genus == "UBA1819"] <- "Ruminococcaceae UBA1819"
 tax_table(rare_r_severity) <- as.matrix(UBA1819_tax)
-
-# rare_r = rare_r %>% tax_fix(unknowns = c("unclassified"))
 
 sample_data(rare_r_severity)$Severity_new <- dplyr::case_when(
   tolower(as.character(sample_data(rare_r_severity)$Severity_new)) == "mild" ~ "Mild (n = 11)",
@@ -523,18 +480,6 @@ sample_data(rare_r_severity)$Severity_new <- factor(
 )
 
 table(sample_data(rare_r_severity)$Severity_new, useNA = "ifany")
-
-# 
-# italic_genera <- c(
-#   "Faecalibacterium", "Prevotella", "Prevotella 6", "Prevotella 7", "Blautia",
-#   "Bacteroides", "Subdoligranulum", "Agathobacter", 
-#   "Escherichia/Shigella", "Flavonifractor", "Ruminiclostridium 5",
-#   "Parabacteroides", "Lactobacillus", "Ezakiella",
-#   "Collinsella", "Oscillibacter", "Ruminococcaceae UCG-002", 
-#   "Ruminococcaceae UBA1819"
-# )
-
-# sort(unique(as.data.frame(tax_table(rare_r))$Genus))
 
 bar = rare_r_severity %>% 
   comp_barplot(
@@ -559,38 +504,6 @@ bar = rare_r_severity %>%
   )
 },
 
-    
-    
-
-    
-    # taxon_renamer = function(x) {
-    #   x_clean <- stringr::str_replace_all(x, "_", " ")
-    #   
-    #   # Special cases
-    #   x_clean <- stringr::str_replace(
-    #     x_clean,
-    #     "^Escherichia/Shigella",
-    #     "<i>Escherichia</i>/<i>Shigella</i>"
-    #   )
-    #   
-    #   # x_clean <- stringr::str_replace(
-    #   #   x_clean,
-    #   #   "UCG-002",
-    #   #   "<i>UCG-002</i>"
-    #   # )
-    #   # 
-    #   # x_clean <- stringr::str_replace(
-    #   #   x_clean,
-    #   #   "UBA1819",
-    #   #   "<i>UBA1819</i>"
-    #   # )
-    #   
-    #   # Then handle all other genera
-    #   pat <- paste0("^(", paste(setdiff(italic_genera, "Escherichia/Shigella"), collapse = "|"), ")")
-    #   
-    #   stringr::str_replace(x_clean, pat, "<i>\\1</i>")
-    # },
-    
     other_name = "Other genera",
     merge_other = TRUE,
     bar_width = 1,
@@ -601,11 +514,9 @@ bar = rare_r_severity %>%
   ) + 
   coord_flip() + 
   guides(fill = guide_legend(ncol = 1)) +
-  labs(#title = "Rectal Samples", 
-    y = "Relative Abundance")
+  labs(y = "Relative Abundance")
 
 bar <- bar + theme(
-  #plot.title = element_text(size = 12.5, hjust = 0.5, face = "bold"),
   strip.text = element_text(color = "black", size = 20, face = "bold"),
   axis.text.x = element_text(color = "black", size = 18, margin = margin (t=6)), 
   axis.text.y = element_text(color = "black", size = 18,  margin = margin (r=4)), 
@@ -624,9 +535,7 @@ bar <- bar + theme(
   legend.background = element_rect(fill = "transparent", colour = NA)
 )
 
-
 bar
-
 
 
 library(cowplot)
@@ -656,7 +565,6 @@ legend <- get_legend(
     )
 ))
 
-
 bar_nolegend <- bar +
   theme(
     legend.position = "none",
@@ -673,7 +581,6 @@ bar_nolegend <- bar +
 bar_nolegend
 ```
 
-## Save 
 ```{r}
 ggsave(
   "vaginal_ra_nolegend_sev.pdf",
@@ -713,7 +620,6 @@ ggsave(
   device = "pdf",
   bg = "transparent"
 )
-
 ```
 
 ### Alpha Diversity 
@@ -837,8 +743,6 @@ p_shannon_severity
 p_invsimpson_severity
 ```
 
-
-### Save alpha diversity figures
 ```{r}
 ggsave(
   filename = "Observed_alpha_diversity_sev.png",
@@ -905,6 +809,7 @@ ggsave(
   dpi = 600,
   bg = "transparent"
 )
+
 ggsave(
   filename = "InvSimpson_alpha_diversity_sev.png",
   plot = p_invsimpson_severity,
@@ -928,7 +833,7 @@ ggsave(
 )
 ```
 
-Phylogenetic diversity from `picante`.
+#### Phylogenetic diversity from `picante`
 
 ```{r}
 set.seed(123)
@@ -1021,8 +926,6 @@ pd_plot <- ggplot(
 
 pd_plot
 ```
-
-## Save PD Figure
 
 ```{r}
 # Save Figures
@@ -1157,8 +1060,7 @@ wuni_test <- adonis3(wuni_dist ~ Severity_plot, data = merged_meta_severity)
 bray_test <- adonis3(bray_dist ~ Severity_plot, data = merged_meta_severity)
 aitch_test <- adonis3(aitch ~ Severity_plot, data = merged_meta_severity)
 
-
-#### Beta Diversity Results  for case-control, run this
+#### Beta Diversity Results  for case-control
 
 beta_results <- data.frame(
   Metric = c(
@@ -1212,14 +1114,6 @@ get_adj_p <- function(metric_name) {
 # ----------------------------------------------------------
 # PCoA plots from phyloseq-supported distances
 # ----------------------------------------------------------
-#sample_data(rare_r_severity)$case_control_new <- factor(
-  #sample_data(rare_r_severity)$case_control_new,
-  #levels = c("control", "case"),
-  #labels = c(
-   # "Controls (n = 14)",
-   # "Cases (n = 21)"
- # )
-#)
 
 ord_uni <- ordinate(rare_r_severity, "PCoA", "unifrac")
 
@@ -1251,12 +1145,10 @@ p_uni <- plot_ordination(rare_r_severity, ord_uni, color = "Severity_plot") +
     legend.key = element_blank()
   ) +
   labs(
-    #title = "PCoA using UniFrac",
     x = paste0("PCoA1 [", round(ord_uni$values$Relative_eig[1] * 100, 1), "%]"),
     y = paste0("PCoA2 [", round(ord_uni$values$Relative_eig[2] * 100, 1), "%]"),
     title = bquote("UniFrac"),
-    subtitle = bquote("Adjusted " * italic(p) == .(get_adj_p("UniFrac")))#,
-    #color = "Case/control"
+    subtitle = bquote("Adjusted " * italic(p) == .(get_adj_p("UniFrac")))
   )
 
 ord_jac <- ordinate(rare_r_severity, "PCoA", "jaccard")
@@ -1289,12 +1181,10 @@ p_jac <- plot_ordination(rare_r_severity, ord_jac, color = "Severity_plot") +
     legend.key = element_blank()
   ) +
   labs(
-    #title = "PCoA using Jaccard",
     x = paste0("PCoA1 [", round(ord_jac$values$Relative_eig[1] * 100, 1), "%]"),
     y = paste0("PCoA2 [", round(ord_jac$values$Relative_eig[2] * 100, 1), "%]"),
     title = bquote("Jaccard"),
-    subtitle = bquote("Adjusted " * italic(p) == .(get_adj_p("Jaccard")))#,
-    #color = "Case/control"
+    subtitle = bquote("Adjusted " * italic(p) == .(get_adj_p("Jaccard")))
   )
 
 ord_wuni <- ordinate(rare_r_severity, "PCoA", "wunifrac")
@@ -1327,12 +1217,10 @@ p_wuni <- plot_ordination(rare_r_severity, ord_wuni, color = "Severity_plot") +
     legend.key = element_blank()
   ) +
   labs(
-    #title = "PCoA using Weighted UniFrac",
     x = paste0("PCoA1 [", round(ord_wuni$values$Relative_eig[1] * 100, 1), "%]"),
     y = paste0("PCoA2 [", round(ord_wuni$values$Relative_eig[2] * 100, 1), "%]"),
     title = bquote("Weighted UniFrac"),
-    subtitle = bquote("Adjusted " * italic(p) == .(get_adj_p("Weighted UniFrac")))#,
-    #color = "Case/control"
+    subtitle = bquote("Adjusted " * italic(p) == .(get_adj_p("Weighted UniFrac")))
   )
 
 ord_bray <- ordinate(rare_r_severity, "PCoA", "bray")
@@ -1365,12 +1253,10 @@ p_bray <- plot_ordination(rare_r_severity, ord_bray, color = "Severity_plot") +
     legend.key = element_blank()
   ) +
   labs(
-    #title = "PCoA using Bray-Curtis",
     x = paste0("PCoA1 [", round(ord_bray$values$Relative_eig[1] * 100, 1), "%]"),
     y = paste0("PCoA2 [", round(ord_bray$values$Relative_eig[2] * 100, 1), "%]"),
     title = bquote ("Bray-Curtis"),
-    subtitle = bquote("Adjusted " * italic(p) == .(get_adj_p("Bray-Curtis")))#,
-    #color = "Case/control"
+    subtitle = bquote("Adjusted " * italic(p) == .(get_adj_p("Bray-Curtis")))
   )
 
 p_bray
@@ -1383,7 +1269,6 @@ scores$Subject.ID <- rownames(scores)
 # Verify IDs match metadata
 setequal(scores$Subject.ID, merged_meta_severity$Subject.ID)
 
-
 # Add original case/control metadata
 scores <- scores %>%
   dplyr::left_join(
@@ -1393,6 +1278,7 @@ scores <- scores %>%
   )
 
 table(scores$Severity_plot, useNA = "always")
+
 # Axis labels
 var_exp <- (pca1$sdev^2) / sum(pca1$sdev^2)
 
@@ -1464,7 +1350,6 @@ p_aitch <- ggplot(
 
 p_aitch
 
-
 # ----------------------------------------------------------
 # Generalized UniFrac PCoA manually from GUniFrac distance
 # ----------------------------------------------------------
@@ -1519,25 +1404,20 @@ p_guni <- ggplot(
     legend.key = element_blank()
   ) +
   labs(
-    #title = "PCoA using Generalized UniFrac",
     x = paste0("PCoA1 [", guni_var[1], "%]"),
     y = paste0("PCoA2 [", guni_var[2], "%]"),
     title = bquote("Generalized UniFrac"),
-    subtitle = bquote("Adjusted " * italic(p) == .(get_adj_p("Generalized UniFrac")))#,
-    #color = "Case/control"
+    subtitle = bquote("Adjusted " * italic(p) == .(get_adj_p("Generalized UniFrac")))
   )
 
-# Print plots
 p_uni
 p_guni
 p_jac
 p_wuni
 p_bray
 p_aitch
-
 ```
 
-### Save beta diversity metrics
 ```{r}
 
 ggsave(
@@ -1591,6 +1471,7 @@ ggsave(
   device = "pdf",
   bg = "transparent"
 )
+
 ggsave(
   filename = "WUniFrac_sev.png",
   plot = p_wuni,
@@ -1664,4 +1545,3 @@ ggsave(
   bg = "transparent"
 )
 ```
-
