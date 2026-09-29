@@ -1,6 +1,6 @@
 ---
 title: "endo_rectal_v9_pain_sensitivity_final"
-author: "Cameron A. Gorzney, Stephen Johnson, Raunak Vijayakar, Michelle Bland"
+author: "Cameron A. Gorzney, Stephen Johnson, Raunak Vijayakar, Michelle K. Bland"
 date: "`r Sys.Date()`"
 output: html_document
 ---
@@ -12,49 +12,28 @@ knitr::opts_chunk$set(echo = TRUE)
 ## Load libraries
 
 ```{r}
-###r version 4.3.2
-
-# # Install specific Bioconductor version
-# install.packages("BiocManager")
-# 
-# BiocManager::install(version = "3.17")
-# 
-# # Then install packages
-# BiocManager::install(c("phyloseq", "microbiome"))
-```
-
-
-```{r}
-# packageVersion("")
-library(vegan) #remotes::install_version("vegan", version = "2.6-10")
+library(vegan)
 library(ggrepel)
-library(readxl) #remotes::install_version("readxl", version = "1.4.5")  
-library(phyloseq) #see above
-library(ggplot2) #remotes::install_version("ggplot2", version = "4.0.0")  
-library(hrbrthemes) #remotes::install_version("hrbrthemes", version = "0.8.7")  
-library(ggsci) #remotes::install_version("ggsci", version = "3.2.0")  
-library(dplyr) #remotes::install_version("dplyr", version = "1.1.4")  
-library(microViz) #see below #needed to install "ggiraph" and "ComplexHeatmap"
-# install.packages(
-#   "microViz",
-#   repos = c(davidbarnett = "https://david-barnett.r-universe.dev", getOption("repos"))
-# )
-library(microbiome) #see above
-library(MicrobiomeStat) #remotes::install_version("MicrobiomeStat", version = "1.0")  
-library(GUniFrac) #remotes::install_version("GUniFrac", version = "1.8")
-library(picante) #remotes::install_version("picante", version = "1.8.2")
-library(ggtext) #remotes::install_version("ggtext", version = "2.6-10")
+library(readxl)
+library(phyloseq)
+library(ggplot2)
+library(hrbrthemes)
+library(ggsci)
+library(dplyr)  
+library(microViz)
+library(microbiome)
+library(MicrobiomeStat)
+library(GUniFrac)
+library(picante)
+library(ggtext)
 library(tidyr)
 library(purrr)
 ```
 
-## Process samples--update paths where appropriate
+## Process samples
 
 ```{r}
-
-
-setwd("~/Library/CloudStorage/OneDrive-MayoClinic/1-Thesis_Research/1-Manuscripts/Microbiome Manuscript")
-
+setwd()
 
 phylo = readRDS("Phylo_public_original_labels.rds")
 meta = samdat_tbl(phylo)
@@ -62,11 +41,8 @@ meta = samdat_tbl(phylo)
 #look at metadata
 summarize_phyloseq(phylo)
 
-table(meta$Source) #I thought this was a binary variable? We'll use only vaginal and rectal
-table(meta$Plate, meta$case_control) #maybe include plate as covariate in models?
-
-fig_dir <- "C:/Users/m298096/OneDrive - Mayo Clinic/1-Thesis_Research/1-Manuscripts/Microbiome Manuscript/MKB figs/[CURRENT] Pain plots/Sensitivity Analyses/Rectal"
-
+table(meta$Source)
+table(meta$Plate, meta$case_control)
 ```
 
 Add sample library size.
@@ -99,29 +75,25 @@ unique(meta_r$Subject.ID)
 
 colSums(table(meta_r$Subject.ID, meta_r$case_control) != 0) #check sample size
 
-#list the subjects who were lost after filtering for amplification
+# List the subjects who were lost after filtering for amplification
 unique(temp$Subject.ID[!(temp$Subject.ID %in% meta_r$Subject.ID)])
-
 ```
 
 Merge and filter.
 
 ```{r}
 merged_r = merge_samples(phylo_r, "subject", fun = sum)
-# We use the sum function here instead of mean to get correct lib_size.
-# The other numeric metadata are completely wrecked, as they would be with any function.
 
 # Keep subject IDs from the merged phyloseq object
 sample_data(merged_r)$Subject.ID = sample_names(merged_r)
 
 # Add corrected patient demographics metadata
 newdata = read_xlsx(
-"~/Library/CloudStorage/OneDrive-MayoClinic/1-Thesis_Research/1-Manuscripts/Microbiome Manuscript/Newdata_endo_pain.xlsx",col_names = T, sheet = 1)
+  "data/Newdata_endo_pain.xlsx",col_names = T, sheet = 1)
 
 splits = strsplit(newdata$`Study ID`, split = "-")
 splits = lapply(splits, head, 2)
 newdata$Subject.ID = sapply(splits, paste, collapse = "")
-
 
 # Keep all clinical variables from the corrected demographics sheet
 newdata = newdata |> 
@@ -209,7 +181,7 @@ table(pain_subject$pain_binary)
 
 merged_r = ps_join(merged_r, pain_subject, by = "Subject.ID", type = "inner")
 
-# Number of unique participants with BOTH microbiome + pain data
+# Number of unique participants with both microbiome + pain data
 n_distinct(sample_data(merged_r)$Subject.ID)
 
 # Check that corrected demographics are still present after join
@@ -222,7 +194,6 @@ summary(merged_meta_check$BMI_new)
 summary(merged_meta_check$Age_new)
 summary(merged_meta_check$parity_new)
 table(merged_meta_check$Severity_new, useNA = "ifany")
-
 
 merged_r <- merged_r %>%
   ps_filter(lib_size > 2000) %>%
@@ -237,8 +208,7 @@ merged_meta_r$paratubal_cysts_new = as.factor(merged_meta_r$paratubal_cysts_new)
 merged_meta_r$Endosalpingiosis_new = as.factor(merged_meta_r$Endosalpingiosis_new)
 merged_meta_r$Adenomyosis_new = as.factor(merged_meta_r$Adenomyosis_new)
 
-
-#check for library size confounding
+# Check for library size confounding
 summary(merged_meta_r$lib_size)
 hist(merged_meta_r$lib_size)
 boxplot(merged_meta_r$lib_size ~ merged_meta_r$case_control_new, notch = F)
@@ -247,20 +217,19 @@ boxplot(merged_meta_r$lib_size ~ merged_meta_r$pain_severity, notch = F)
 kruskal.test(merged_meta_r$lib_size ~ merged_meta_r$pain_severity)
 
 
-#rarefy
+# Rarefy
 set.seed(123)
-rare_r = rarefy_even_depth(merged_r, replace = F) #rarefy to min depth or 2k, whichever greater
-
+rare_r = rarefy_even_depth(merged_r, replace = F) # Rarefy to min depth or 2k, whichever greater
 ```
 
 ### Check matched samples
+
 ```{r}
 # Rectal subjects after Amp + merge + pain join + lib_size/tax filtering
 rectal_pain_subjects <- samdat_tbl(merged_r) %>%
   dplyr::filter(!is.na(pain_severity)) %>%
   dplyr::distinct(Subject.ID) %>%
   dplyr::pull(Subject.ID)
-
 
 phylo_v <- phylo |> 
   ps_filter(Source == "vagina") |>
@@ -309,19 +278,17 @@ merged_v <- merged_v %>%
 
 merged_meta_v <- samdat_tbl(merged_v)
 
-
 # Vaginal subjects after Amp + merge + pain join + lib_size/tax filtering
 vaginal_pain_subjects <- samdat_tbl(merged_v) %>%
   dplyr::filter(!is.na(pain_severity)) %>%
   dplyr::distinct(Subject.ID) %>%
   dplyr::pull(Subject.ID)
 
-# Subjects with BOTH rectal and vaginal swabs in pain cohort
+# Subjects with both rectal + vaginal swabs in pain cohort
 matched_pain_subjects <- intersect(rectal_pain_subjects, vaginal_pain_subjects)
 
 length(matched_pain_subjects)
 matched_pain_subjects
-
 
 matched_pain_summary <- samdat_tbl(merged_r) %>%
   dplyr::filter(Subject.ID %in% matched_pain_subjects) %>%
@@ -331,15 +298,15 @@ matched_pain_summary <- samdat_tbl(merged_r) %>%
 table(matched_pain_summary$pain_severity)
 table(matched_pain_summary$case_control_new, matched_pain_summary$pain_severity)
 
-
-# Subjects with BOTH rectal and vaginal data
+# Subjects with both rectal + vaginal data
 matched_subjects <- intersect(rectal_pain_subjects, vaginal_pain_subjects)
 
 # Total matched participants
 length(matched_subjects)
 ```
 
-### Checking other diagnoses against Pain Severity
+### Checking other diagnoses against pain severity
+
 ```{r}
 categorical_pvals <- tibble::tibble(
   Variable = c(
@@ -439,11 +406,9 @@ continuous_pvals_pain <- merged_meta_r %>%
   )
 
 continuous_pvals_pain
-
 ```
 
-### Alpha Diversity for pain severity
-
+### Alpha Diversity
 ```{r}
 set.seed(123)
 
@@ -489,8 +454,7 @@ alpha_results <- tibble(
   )
 ) %>%
   mutate(
-    FDR = p.adjust(Pvalue, method = "fdr")#,
-    #p_label = paste0("Kruskal-Wallis p = ", signif(Pvalue, 3))
+    FDR = p.adjust(Pvalue, method = "fdr")
   )
 
 alpha_results
@@ -560,8 +524,6 @@ p_invsimpson
 ```
 
 ```{r}
-# Save figures
-
 ggsave(
   filename = "Observed_alpha_diversity.png",
   plot = p_observed,
@@ -627,6 +589,7 @@ ggsave(
   dpi = 600,
   bg = "transparent"
 )
+
 ggsave(
   filename = "InvSimpson_alpha_diversity.png",
   plot = p_invsimpson,
@@ -650,8 +613,7 @@ ggsave(
 )
 ```
 
-
-Phylogenetic diversity from `picante`.
+#### Phylogenetic diversity from `picante`
 
 ```{r}
 set.seed(123)
@@ -734,7 +696,6 @@ pd_plot <- ggplot(
 pd_plot
 ```
 
-# Save Figures
 ```{r}
 ggsave(
   filename = "Faith_PD.png",
@@ -759,7 +720,7 @@ ggsave(
 )
 ```
 
-### New beta diversity for pain severity, with plots
+### Beta Diversity
 
 ```{r}
 set.seed(123)
@@ -847,6 +808,7 @@ scores$Subject.ID <- rownames(scores)
 
 # Aitchison distance
 aitch <- vegan::vegdist(clr_mat, method = "euclidean")
+
 # ----------------------------------------------------------
 # PERMANOVA
 # ----------------------------------------------------------
@@ -911,6 +873,7 @@ get_adj_p <- function(metric_name) {
 # ----------------------------------------------------------
 # PCoA plots from phyloseq-supported distances
 # ----------------------------------------------------------
+
 sample_data(rare_r)$pain_severity <- factor(
   sample_data(rare_r)$pain_severity,
   levels = c("No pain", "Mild pain", "Moderate pain", "Severe pain"),
@@ -952,7 +915,6 @@ p_uni <- plot_ordination(rare_r, ord_uni, color = "pain_severity") +
     legend.key = element_blank()
   ) +
   labs(
-    #title = "PCoA using UniFrac",
     x = paste0("PCoA1 [", round(ord_uni$values$Relative_eig[1] * 100, 1), "%]"),
     y = paste0("PCoA2 [", round(ord_uni$values$Relative_eig[2] * 100, 1), "%]"),
     title = bquote("UniFrac"),
@@ -990,7 +952,6 @@ p_jac <- plot_ordination(rare_r, ord_jac, color = "pain_severity") +
     legend.key = element_blank()
   ) +
   labs(
-    #title = "PCoA using Jaccard",
     x = paste0("PCoA1 [", round(ord_jac$values$Relative_eig[1] * 100, 1), "%]"),
     y = paste0("PCoA2 [", round(ord_jac$values$Relative_eig[2] * 100, 1), "%]"),
     title = bquote("Jaccard"),
@@ -1028,7 +989,6 @@ p_wuni <- plot_ordination(rare_r, ord_wuni, color = "pain_severity") +
     legend.key = element_blank()
   ) +
   labs(
-    #title = "PCoA using Weighted UniFrac",
     x = paste0("PCoA1 [", round(ord_wuni$values$Relative_eig[1] * 100, 1), "%]"),
     y = paste0("PCoA2 [", round(ord_wuni$values$Relative_eig[2] * 100, 1), "%]"),
     title = bquote("Weighted UniFrac"),
@@ -1066,7 +1026,6 @@ p_bray <- plot_ordination(rare_r, ord_bray, color = "pain_severity") +
     legend.key = element_blank()
   ) +
   labs(
-    #title = "PCoA using Bray-Curtis",
     x = paste0("PCoA1 [", round(ord_bray$values$Relative_eig[1] * 100, 1), "%]"),
     y = paste0("PCoA2 [", round(ord_bray$values$Relative_eig[2] * 100, 1), "%]"),
     title = bquote ("Bray-Curtis"),
@@ -1074,14 +1033,12 @@ p_bray <- plot_ordination(rare_r, ord_bray, color = "pain_severity") +
     color = "Pain Severity"
   )
 
-
 # PCA scores
 scores <- as.data.frame(pca1$x)
 scores$Subject.ID <- rownames(scores)
 
 # Verify IDs match metadata
 setequal(scores$Subject.ID, merged_meta_r$Subject.ID)
-
 
 # Add pain severity to metadata
 scores <- scores %>%
@@ -1092,7 +1049,6 @@ scores <- scores %>%
   )
 
 table(scores$pain_severity, useNA = "always")
-
 
 # Axis labels
 var_exp <- (pca1$sdev^2) / sum(pca1$sdev^2)
@@ -1162,7 +1118,6 @@ p_aitch <- ggplot(
     subtitle = bquote("Adjusted " * italic(p) == .(get_adj_p("Aitchison Distance")))
   )
 
-
 p_aitch
 
 # ----------------------------------------------------------
@@ -1220,7 +1175,6 @@ p_guni <- ggplot(
     legend.key = element_blank()
   ) +
   labs(
-    #title = "PCoA using Generalized UniFrac",
     x = paste0("PCoA1 [", guni_var[1], "%]"),
     y = paste0("PCoA2 [", guni_var[2], "%]"),
     title = bquote("Generalized UniFrac"),
@@ -1230,14 +1184,13 @@ p_guni <- ggplot(
 
 # Print individual plots (raw p-values)
 p_uni
-p_guni #not sure why guni didn't have %var on axes. -fixed it above.
+p_guni
 p_jac
 p_wuni
 p_bray
 p_aitch
 ```
 
-### Save beta-diversity plots
 ```{r}
 ggsave(
   filename = "Bray-Curtis.pdf",
@@ -1249,6 +1202,7 @@ ggsave(
   device = "pdf",
   bg = "transparent"
 )
+
 ggsave(
   filename = "Bray-Curtis.png",
   plot = p_bray,
@@ -1290,6 +1244,7 @@ ggsave(
   device = "pdf",
   bg = "transparent"
 )
+
 ggsave(
   filename = "WUniFrac.png",
   plot = p_wuni,
@@ -1352,20 +1307,19 @@ ggsave(
   device = "pdf",
   bg = "transparent"
 )
-
 ```
 
 #### PAM clustering
 
-##### Bray-Curtis for pain severity
+##### Bray-Curtis
 
 Calculate BC dissimilarity on rarefied data, then cluster with PAM, k selected using mean silhouette width.
 ```{r}
-#determine number of clusters
-library(cluster) #remotes::install_version("cluster", version = "2.1.8.1")
-library(scales) #remotes::install_version("scales", version = "1.4.0")
+# Determine number of clusters
+library(cluster)
+library(scales)
 
-#use sil to choose number of clusters
+# Use sil to choose number of clusters
 set.seed(123)
 k.max <- 10
 
@@ -1374,8 +1328,6 @@ SIL = sapply(2:k.max, function(i) {
   mean(silhouette(results.coef.pam$clustering, dist = bray_dist)[,"sil_width"]) })
 
 plot(c(0,SIL), type="b", main = "Selecting k PAM clusters", ylab = "Mean Silhouette Width", xlab = "Clusters")
-
-
 ```
 
 Visualize clusters and pain severity status on PCoA. 
@@ -1383,9 +1335,6 @@ Visualize clusters and pain severity status on PCoA.
 ```{r}
 set.seed(123)
 pam_bc = pam(bray_dist, 2, nstart = 50, diss = T)
-
-# ord = cmdscale(bray_dist, 4, eig = TRUE)
-# plot(ord$points, col = clusters, pch = 19, xlab="PCoA1", ylab="PCoA2")
 
 sample_data(rare_r)$Cluster = as.factor(pam_bc$clustering) #add clustering information to ps object's sample data
 
@@ -1427,7 +1376,6 @@ library(zCompositions)
 library(compositions)
 library(cluster)
 
-
 # Select k for PAM clustering
 set.seed(123)
 k.max <- 10
@@ -1445,7 +1393,6 @@ aitch_plot <- plot(
   ylab = "Mean Silhouette Width",
   xlab = "Clusters"
 )
-
 
 sil_df <- data.frame(
   Clusters = 2:k.max,
@@ -1471,10 +1418,8 @@ p_sil <- ggplot(
   )
 
 p_sil
-
 ```
 
-## Save SIL
 ```{r}
 ggsave(
   filename = "Aitch_SIL_plot.pdf",
@@ -1488,7 +1433,7 @@ ggsave(
 )
 ```
 
-# PAM clustering using k = 3 --> identified 3 clusters after updating samples
+# PAM clustering using k = 3 (identified 3 clusters)
 ```{r}
 set.seed(123)
 pam_aitch <- pam(aitch, 3, nstart = 50, diss = TRUE)
@@ -1562,12 +1507,6 @@ merged_meta_r <- merged_meta_r %>%
     )
   )
 
-# merged_meta_r$Cluster_Aitchison <- factor(
-#   merged_meta_r$Cluster_Aitchison,
-#   levels = c(1, 2, 3),
-#   labels = c("Cluster 1", "Cluster 2", "Cluster 3")
-# )
-
 # Plot Aitchison PCA by pain severity and cluster
 aitch_plot <- ggplot(
   merged_meta_r,
@@ -1584,7 +1523,6 @@ aitch_plot <- ggplot(
     aes(group = Cluster_Aitchison),
     linewidth = 0.5,
     linetype = 2,
-    #color = "black",
     type = "norm"
   ) +
   
@@ -1621,10 +1559,8 @@ aitch_plot
 sum(is.na(merged_meta_r$PC1))
 sum(is.na(merged_meta_r$Cluster_Aitchison))
 all(scores$Subject.ID %in% merged_meta_r$Subject.ID)
-
 ```
 
-### Save Clusters
 ```{r}
 ggsave(
   filename = "Aitchison_pain.png",
@@ -1646,10 +1582,9 @@ ggsave(
   device = "pdf",
   bg = "transparent"
 )
-
 ```
 
-### DAA using ZicoSeq with Respect to pain severity 
+### DAA using ZicoSeq with respect to pain severity 
 
 ```{r}
 ############################################################
@@ -1732,7 +1667,6 @@ stopifnot(nrow(meta_zico) > 0)
 stopifnot(nrow(otu_zico) > 0)
 stopifnot(ncol(otu_zico) == nrow(meta_zico))
 stopifnot(all(colnames(otu_zico) == rownames(meta_zico)))
-
 
 # ----------------------------------------------------------
 # 4. Run ZicoSeq
@@ -1843,7 +1777,6 @@ zico_plot <- ggplot(
     axis.text.y = element_text(size = 18, color = "black"),
     axis.title.x = element_text(size = 18, face = "bold"),
     axis.title.y = element_text(size = 18, face = "bold"),
-    #plot.title = element_text(size = 22, hjust = 0.5),
     plot.subtitle = element_text(size = 24, hjust = 0.5),
     legend.title = element_text(size = 18),
     legend.text = element_text(size = 18),
@@ -1864,7 +1797,6 @@ zico_plot <- ggplot(
 zico_plot
 ```
 
-## Save DAA
 ```{r}
 ggsave(
   filename = "zico_pain.png",
@@ -1975,10 +1907,9 @@ pheatmap::pheatmap(
     "Higher\n(+1.5)"
   )
 )
-
 ```
 
-### Boxplots for significant taxa
+#### Boxplots for significant taxa
 
 ```{r}
 ############################################################
@@ -2112,10 +2043,6 @@ make_taxon_plot <- function(genus_name) {
     bquote(italic(.(genus_name)))
   }
   
-
-
-
-  
 p <- ggplot(
   df_taxon,
   aes(
@@ -2187,7 +2114,6 @@ taxon_plots <- purrr::map(
   make_taxon_plot
 )
 
-
 names(taxon_plots) <- unique(plot_df$Genus_clean)
 taxon_plots$Ezakiella
 taxon_plots$`Clostridiales Family XI W5053`
@@ -2195,12 +2121,6 @@ taxon_plots$`Lachnospiraceae_UCG-001`
 ```
 
 ```{r}
-
-############################################################
-# Save plots
-############################################################
-fig_dir <- "~/Documents/Co-mentorship/Walther-António_Lab/Cameron_paper/MKB_files/Plots/Pain"
-
 ggsave(
   filename = "W5053_pain_boxplot.png",
   plot = taxon_plots[["Clostridiales Family XI W5053"]],
@@ -2246,8 +2166,8 @@ ggsave(
 )
 ```
 
-
 ### Fisher's test for cluster based on pain severity
+
 ```{r}
 fisher.test(
   table(
@@ -2299,10 +2219,10 @@ p.adjust(
   unlist(pairwise_results),
   method = "fdr"
 )
-
 ```
 
 ## Graph cluster counts and Fisher's results
+
 ```{r}
 cluster_counts <- merged_meta_r %>%
   mutate(
@@ -2341,7 +2261,6 @@ p.adjust(
   unlist(pairwise_results),
   method = "fdr"
 )
-
 
 cluster_counts <- merged_meta_r %>%
   mutate(
@@ -2414,7 +2333,7 @@ clusters_pain_counts <- ggplot(
 
 clusters_pain_counts
 
-## Add fisher's p-value to the plot
+## Add Fisher's p-value to the plot
 fisher_p <- fisher.test(
   table(
     merged_meta_r$Cluster_Aitchison,
@@ -2444,10 +2363,8 @@ pairwise_df <- tibble::tibble(
   )
 
 pairwise_df
-
-
 ```
-# Save 
+
 ```{r}
 ggsave(
   filename = "aitch_pain_clusters.png",
@@ -2472,9 +2389,9 @@ ggsave(
 )
 ```
 
-### Secondary cluster analayses...zicoseq 
+### Secondary cluster analayses with ZicoSeq
 
-```{r, eval =F}
+```{r, eval = FALSE}
 ############################################################
 # Secondary analysis: characterize Aitchison clusters
 ############################################################
@@ -2585,7 +2502,6 @@ sig_zico_cluster <- zico_cluster_results %>%
 
 sig_zico_cluster
 
-
 ############################################################
 # Part 2. Cluster-defining taxa heatmap
 ############################################################
@@ -2605,6 +2521,7 @@ clr_cluster_meta <- clr_cluster %>%
 ############################################################
 # Part 3. Identify which Cluster each sig taxa is highest in
 ############################################################
+
 if (nrow(sig_zico_cluster) > 0) {
   
   cluster_taxa_medians <- clr_cluster_meta %>%
@@ -2667,6 +2584,7 @@ cluster_taxa_summary
 ############################################################
 # Part 4. Generic DAA volcano plot for clusters
 ############################################################
+
 cluster_taxa_medians <- cluster_taxa_medians %>%
   dplyr::mutate(
     Genus_clean = dplyr::case_when(
@@ -2778,7 +2696,6 @@ zico_clusters_df <- zico_cluster_results %>%
     )
   )
 
-
 zico_plot_clusters <- ggplot(
   zico_clusters_df,
   aes(
@@ -2822,17 +2739,12 @@ zico_plot_clusters <- ggplot(
   limits = c(0, 4),
   expand = expansion(mult = c(0.02, 0.2))
 ) +
-  #scale_x_continuous(
-  #limits = c(0, 0.6),
-  #expand = expansion(mult = c(0.02, 0.05))
-#) #+
   theme_classic(base_size = 16) +
   theme(
     axis.text.x = element_text(size = 18, color = "black"),
     axis.text.y = element_text(size = 18, color = "black"),
     axis.title.x = element_text(size = 18, face = "bold"),
     axis.title.y = element_text(size = 18, face = "bold"),
-    #plot.title = element_text(size = 22, hjust = 0.5),
     plot.subtitle = element_text(size = 24, hjust = 0.5),
     legend.title = element_text(size = 18),
     legend.text = element_text(size = 18),
@@ -2850,7 +2762,6 @@ zico_plot_clusters <- ggplot(
     y = expression(-log[10]("FDR")),
     color = ""
   )
-
 
 zico_plot_clusters
 ```
@@ -2877,7 +2788,6 @@ ggsave(
   device = "pdf",
   bg = "transparent"
 )
-
 ```
 
 ```{r}
@@ -2979,9 +2889,6 @@ cluster_taxa_pairwise_direction
 cluster_taxa_pairwise_direction %>%
   dplyr::filter(Pairwise_FDR < 0.05)
 
-
-
-
 ############################################################
 # 6. Plot cluster pairwise comparisons for significant taxa
 ############################################################
@@ -3012,7 +2919,6 @@ cluster_taxa_boxplot_df <- clr_cluster_meta %>%
       levels = c("1", "2", "3")
     )
   )
-
 
 plot_cluster_taxon <- function(taxon_name) {
   
@@ -3097,7 +3003,6 @@ plot_cluster_taxon <- function(taxon_name) {
       panel.background = element_rect(fill = "transparent", colour = NA),
       plot.background = element_rect(fill = "transparent", colour = NA)
   )
-    
 }
 
 ezakiella_plot <- plot_cluster_taxon("Ezakiella")
@@ -3108,7 +3013,6 @@ pepto_plot <- plot_cluster_taxon("Peptoniphilus")
 pepto_plot
 peptostrepto_plot <- plot_cluster_taxon("Peptostreptococcus")
 peptostrepto_plot
-
 
 plot_cluster_taxon("Peptostreptococcus")
 plot_cluster_taxon("Ruminiclostridium 6")
@@ -3122,13 +3026,10 @@ plot_cluster_taxon("Lachnoclostridium")
 plot_cluster_taxon("Peptoniphilus")
 plot_cluster_taxon("Ruminococcaceae UCG-002")
 plot_cluster_taxon("Ruminococcus 1")
-
-
 ```
 
-
-### Don't run, used to identify unclassified taxa and rename with family name
-```{r eval=FALSE}
+### Do not run, used to identify unclassified taxa and rename with family name
+```{r, eval = FALSE}
 cluster_taxa_summary %>%
   dplyr::select(
     Genus_clean,
@@ -3194,10 +3095,8 @@ prop.table(
   ),
   margin = 2
 )
-
 ```
 
-## Save significant taxa
 ```{r}
 ggsave(
   filename = "ezakiella_plot.pdf",
@@ -3220,7 +3119,6 @@ ggsave(
   device = "pdf",
   bg = "transparent"
 )
-
 
 ggsave(
   filename = "pepto_plot.pdf",
@@ -3245,14 +3143,14 @@ ggsave(
 )
 ```
 
-
 ### Network analyses
 
 ```{r}
 library(SpiecEasi)
 set.seed(123)
+
 #get counts
-sparcc_tab = merged_r |> tax_glom(taxrank = "Genus") |> tax_filter(min_prevalence = 0.2) #|> tax_select("unclassified", deselect = T)
+sparcc_tab = merged_r |> tax_glom(taxrank = "Genus") |> tax_filter(min_prevalence = 0.2)
 
 sparcc_counts = otu_table(sparcc_tab)
 sparcc_ra = sparcc_counts / rowSums(sparcc_counts) #rel abundance
@@ -3268,11 +3166,10 @@ colnames(sparcc_res$Cov) = colnames(sparcc_counts)
 
 sparcc_cor = sparcc_res$Cor
 
-#re rename
+#rename
 sum(rownames(sparcc_cor) != rownames(tax_table(sparcc_tab))) #0 means names match
 rownames(sparcc_cor) = tax_table(sparcc_tab)[,"Genus"]
 colnames(sparcc_cor) = tax_table(sparcc_tab)[,"Genus"]
-
 ```
 
 
@@ -3281,6 +3178,7 @@ get_lower_tri<-function(cormat){
   cormat[upper.tri(cormat)] <- NA
   return(cormat)
 }
+
 # Get upper triangle of the correlation matrix
 get_upper_tri <- function(cormat){
   cormat[lower.tri(cormat)]<- NA
@@ -3301,20 +3199,20 @@ reorder_cor_and_p <- function(cormat, pmat){
   pmat <- pmat[hc$order, hc$order]
   list(r = cormat, p = pmat)
 }
-
 ```
 
 
 #### CLR and spearman correlations on pain subset
 
-Some taxa pairs looked nonlinear, so I switched to spearman.
+Because some taxa pairs looked nonlinear, Spearman was used.
 
 ```{r}
-library(psych) #remotes::install_version("psych", version = "2.5.3")
+library(psych)
 
 set.seed(123)
+
 #get counts
-sparcc_tab = merged_r |> tax_glom(taxrank = "Genus") |> tax_filter(min_prevalence = 0.2) #|> tax_select("unclassified", deselect = T)
+sparcc_tab = merged_r |> tax_glom(taxrank = "Genus") |> tax_filter(min_prevalence = 0.2)
 
 sparcc_counts = otu_table(sparcc_tab)
 sparcc_ra = sparcc_counts / rowSums(sparcc_counts) #rel abundance
@@ -3337,7 +3235,7 @@ spearPClr <- spearCorTestClr$p
 
 sum(rownames(spearCorClr) != rownames(tax_table(sparcc_tab))) #0 means names match
 
-# must comment out this renaming block to determine which asvs are unclassified and significant
+
 rownames(spearCorClr) = tax_table(sparcc_tab)[,"Genus"]
 colnames(spearCorClr) = tax_table(sparcc_tab)[,"Genus"]
 
@@ -3383,11 +3281,11 @@ spearRhoPClr_plot <- spearRhoP_Clr %>% ggplot(aes(x = Var2, y = Var1, fill = rho
 spearRhoPClr_plot
 ```
 
-
-Trying to visualize just the significant results.
+Visualize just the significant results.
 ```{r}
 library(igraph)
 library(ggraph)
+
 #unmodified plot
 edges <- spearOkP_Clr
 
@@ -3416,25 +3314,12 @@ ggraph(g, layout = "kk") +
   scale_edge_color_manual(values = c("TRUE" = "steelblue", "FALSE" = "firebrick")) +
   theme_void()
 
-
-
-
 ggraph(g, layout = "kk") +
   geom_edge_link(
     aes(width = abs(rho), color = rho > 0),
     alpha = 0.4
   ) +
   geom_node_point(size = 2, color = "grey") +
-  # geom_node_label(
-  #   aes(label = name),
-  #   fill = "white",
-  #   color = "black",
-  #   size = 3.5,
-  #   repel = TRUE,
-  #   label.padding = unit(0.15, "lines"),
-  #   label.r = unit(0.1, "lines"),
-  #   label.size = 0.25
-  # ) +
   geom_node_label(
     aes(label = name, fill = deg),
     color = "white",
@@ -3448,8 +3333,6 @@ ggraph(g, layout = "kk") +
     values = c("TRUE" = "steelblue", "FALSE" = "firebrick")
   ) +
   theme_void()
-
-
 ```
 
 
@@ -3457,7 +3340,6 @@ ggraph(g, layout = "kk") +
 edges <- spearOkP_Clr
 
 g <- graph_from_data_frame(edges, directed = FALSE)
-
 
 degAll <- igraph::degree(g, v = igraph::V(g), mode = "all")
 betAll <- igraph::betweenness(g, v = igraph::V(g), directed = FALSE) / (((igraph::vcount(g) - 1) * (igraph::vcount(g)-2)) / 2)
@@ -3473,34 +3355,25 @@ g <- igraph::set.vertex.attribute(g, "bet", index = igraph::V(g), value = betAll
 deg <- igraph::degree(g)
 bet <- igraph::betweenness(g, directed = F)
 
-#renaming
-#"CAG-56"
+# renaming
+
+# "CAG-56"
 as.data.frame(tax_table(rare_r))[grepl("CAG-56", as.data.frame(tax_table(rare_r))$Genus), ]
 as.data.frame(tax_table(rare_r))["f247d6391a08e1c052517539c487d0864a7d9ca9",]
 
 V(g)$name[V(g)$name == "CAG-56"] <- "Lachnospiraceae CAG-56"
 
-#"UBA1819"
+# "UBA1819"
 as.data.frame(tax_table(rare_r))[grepl("UBA1819", as.data.frame(tax_table(rare_r))$Genus), ]
 as.data.frame(tax_table(rare_r))["189345b67bd77229c8027462d9081974e7bd252c",]
 
 V(g)$name[V(g)$name == "UBA1819"] <- "Ruminococcaceae UBA1819"
 
-#"DTU089"
+# "DTU089"
 as.data.frame(tax_table(rare_r))[grepl("DTU089", as.data.frame(tax_table(rare_r))$Genus), ]
 as.data.frame(tax_table(rare_r))["2dbd721f8a6f7678c32638f76877db3fbda70c51",]
 
 V(g)$name[V(g)$name == "DTU089"] <- "Ruminococcaceae DTU089"
-
-#"unclassified"
-
-# reformat Genus text as follows:
-# 1. Replace _ → space
-# 2. If two parts:
-# --First word (family like Ruminococcaceae) → NOT italic
-# --Everything after → italic
-# 3. If a trailing standalone number → keep number NOT italic
-# 4. Otherwise (single genus like Prevotella, UBA1819) → fully italicunderscores with spaces + build italic labels
 
 label_clean <- gsub("_", " ", V(g)$name)
 
@@ -3513,35 +3386,6 @@ make_label_expr <- function(x) {
     paste0("italic('", x, "')")
   }
 }
-
-V(g)$label_expr <- sapply(label_clean, make_label_expr)
-#   # case 0: unclassified → NOT italic
-#   if (tolower(x) == "unclassified") {
-#     return(paste0("'", x, "'"))
-#   }
-#   
-#   # case 1: trailing standalone number, e.g. Prevotella 7
-#   if (grepl("^[A-Za-z]+ [0-9]+$", x)) {
-#     return(sub("^(.*) ([0-9]+)$", "italic('\\1')~'\\2'", x))
-#   }
-#   
-#   # case 2: Family XIII AD3011 group
-#   if (grepl("^Family [A-Za-z0-9]+ ", x)) {
-#     first <- sub("^(Family [A-Za-z0-9]+) (.*)$", "\\1", x)
-#     rest  <- sub("^(Family [A-Za-z0-9]+) (.*)$", "\\2", x)
-#     return(paste0("'", first, "'~italic('", rest, "')"))
-#   }
-#   
-#   # case 3: standard family + group (one-word family)
-#   if (grepl(" ", x)) {
-#     first <- sub("^([^ ]+) (.*)$", "\\1", x)
-#     rest  <- sub("^([^ ]+) (.*)$", "\\2", x)
-#     return(paste0("'", first, "'~italic('", rest, "')"))
-#   }
-#   
-#   # case 4: single word
-#   paste0("italic('", x, "')")
-# }
 
 V(g)$label_expr <- sapply(label_clean, make_label_expr)
 
@@ -3579,10 +3423,8 @@ network  <- ggraph(g, layout = "kk") +
     legend.title = element_text(size = 10),
     legend.text  = element_text(size = 9)
   )
-
 ```
 
-### Save
 ```{r}
 ggsave(
   filename = "network.pdf",

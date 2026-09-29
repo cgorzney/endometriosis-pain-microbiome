@@ -1,6 +1,6 @@
 ---
 title: "endo_vaginal_v9_pain_sensitivity_final"
-author: "Cameron A. Gorzney, Stephen Johnson, Raunak Vijayakar, Michelle Bland"
+author: "Cameron A. Gorzney, Stephen Johnson, Raunak Vijayakar, Michelle K. Bland"
 date: "`r Sys.Date()`"
 output: html_document
 ---
@@ -12,38 +12,20 @@ knitr::opts_chunk$set(echo = TRUE)
 ## Load libraries
 
 ```{r}
-###r version 4.3.2
-
-# # Install specific Bioconductor version
-# install.packages("BiocManager")
-# 
-# BiocManager::install(version = "3.17")
-# 
-# # Then install packages
-# BiocManager::install(c("phyloseq", "microbiome"))
-```
-
-
-```{r}
-# packageVersion("")
-library(vegan) #remotes::install_version("vegan", version = "2.6-10")
+library(vegan)
 library(ggrepel)
-library(readxl) #remotes::install_version("readxl", version = "1.4.5")  
-library(phyloseq) #see above
-library(ggplot2) #remotes::install_version("ggplot2", version = "4.0.0")  
-library(hrbrthemes) #remotes::install_version("hrbrthemes", version = "0.8.7")  
-library(ggsci) #remotes::install_version("ggsci", version = "3.2.0")  
-library(dplyr) #remotes::install_version("dplyr", version = "1.1.4")  
-library(microViz) #see below #needed to install "ggiraph" and "ComplexHeatmap"
-# install.packages(
-#   "microViz",
-#   repos = c(davidbarnett = "https://david-barnett.r-universe.dev", getOption("repos"))
-# )
-library(microbiome) #see above
-library(MicrobiomeStat) #remotes::install_version("MicrobiomeStat", version = "1.0")  
-library(GUniFrac) #remotes::install_version("GUniFrac", version = "1.8")
-library(picante) #remotes::install_version("picante", version = "1.8.2")
-library(ggtext) #remotes::install_version("ggtext", version = "2.6-10")
+library(readxl)
+library(phyloseq)
+library(ggplot2)
+library(hrbrthemes)
+library(ggsci)
+library(dplyr)  
+library(microViz)
+library(microbiome)
+library(MicrobiomeStat)
+library(GUniFrac)
+library(picante)
+library(ggtext)
 library(tidyr)
 library(purrr)
 ```
@@ -51,9 +33,7 @@ library(purrr)
 ## Process samples
 
 ```{r}
-
 setwd()
-
 
 phylo = readRDS("data/Phylo_public_original_labels.rds")
 meta = samdat_tbl(phylo)
@@ -61,9 +41,8 @@ meta = samdat_tbl(phylo)
 #look at metadata
 summarize_phyloseq(phylo)
 
-table(meta$Source) #I thought this was a binary variable? We'll use only vaginal and rectal
-table(meta$Plate, meta$case_control) #maybe include plate as covariate in models?
-
+table(meta$Source)
+table(meta$Plate, meta$case_control)
 ```
 
 Add sample library size.
@@ -77,7 +56,6 @@ phylo = ps_join(x = phylo, y = depth, by = "SampleID", type = "inner", match_sam
 
 sample_data(phylo)$subject = as.factor(sample_data(phylo)$subject)
 ```
-
 
 ```{r}
 unique(meta$Source)
@@ -95,17 +73,14 @@ unique(meta_r$Subject.ID)
 
 colSums(table(meta_r$Subject.ID, meta_r$case_control) != 0) #check sample size
 
-#list the subjects who were lost after filtering for amplification
+# List the subjects who were lost after filtering for amplification
 unique(temp$Subject.ID[!(temp$Subject.ID %in% meta_r$Subject.ID)])
-
 ```
 
 Merge and filter.
 
 ```{r}
 merged_r = merge_samples(phylo_r, "subject", fun = sum)
-# We use the sum function here instead of mean to get correct lib_size.
-# The other numeric metadata are completely wrecked, as they would be with any function.
 
 # Keep subject IDs from the merged phyloseq object
 sample_data(merged_r)$Subject.ID = sample_names(merged_r)
@@ -117,7 +92,6 @@ newdata = read_xlsx(
 splits = strsplit(newdata$`Study ID`, split = "-")
 splits = lapply(splits, head, 2)
 newdata$Subject.ID = sapply(splits, paste, collapse = "")
-
 
 # Keep all clinical variables from the corrected demographics sheet
 newdata = newdata |> 
@@ -202,7 +176,6 @@ table(pain_subject$pain_score)
 table(pain_subject$pain_severity)
 table(pain_subject$pain_binary)
 
-
 merged_r = ps_join(merged_r, pain_subject, by = "Subject.ID", type = "inner")
 
 # Number of unique participants with BOTH microbiome + pain data
@@ -233,8 +206,7 @@ merged_meta_r$paratubal_cysts_new = as.factor(merged_meta_r$paratubal_cysts_new)
 merged_meta_r$Endosalpingiosis_new = as.factor(merged_meta_r$Endosalpingiosis_new)
 merged_meta_r$Adenomyosis_new = as.factor(merged_meta_r$Adenomyosis_new)
 
-
-#check for library size confounding
+# Check for library size confounding
 summary(merged_meta_r$lib_size)
 hist(merged_meta_r$lib_size)
 boxplot(merged_meta_r$lib_size ~ merged_meta_r$case_control_new, notch = F)
@@ -242,14 +214,13 @@ wilcox.test(merged_meta_r$lib_size ~ merged_meta_r$case_control_new)
 boxplot(merged_meta_r$lib_size ~ merged_meta_r$pain_severity, notch = F)
 kruskal.test(merged_meta_r$lib_size ~ merged_meta_r$pain_severity)
 
-
-#rarefy
+# Rarefy
 set.seed(123)
-rare_r = rarefy_even_depth(merged_r, replace = F) #rarefy to min depth or 2k, whichever greater
-
+rare_r = rarefy_even_depth(merged_r, replace = F) # Rarefy to min depth or 2k, whichever greater
 ```
 
-### Checking other diagnoses against Pain Severity
+### Checking other diagnoses against pain severity
+
 ```{r}
 categorical_pvals <- tibble::tibble(
   Variable = c(
@@ -349,10 +320,9 @@ continuous_pvals_pain <- merged_meta_r %>%
   )
 
 continuous_pvals_pain
-
 ```
 
-### Alpha Diversity for pain severity
+### Alpha Diversity
 
 ```{r}
 set.seed(123)
@@ -399,8 +369,7 @@ alpha_results <- tibble(
   )
 ) %>%
   mutate(
-    FDR = p.adjust(Pvalue, method = "fdr")#,
-    #p_label = paste0("Kruskal-Wallis p = ", signif(Pvalue, 3))
+    FDR = p.adjust(Pvalue, method = "fdr")
   )
 
 alpha_results
@@ -454,7 +423,6 @@ plot_alpha_metric <- function(metric_name) {
     labs(
       x = "Pain Severity",
       y = metric_labels[[metric_name]],
-      #title = paste0(metric_labels[[metric_name]], " by pain severity"),
       subtitle = p_lab
     )
 }
@@ -469,11 +437,7 @@ p_shannon
 p_invsimpson
 ```
 
-
-### Save figures
 ```{r}
-# Save figures
-
 ggsave(
   filename = "Observed_alpha_diversity.png",
   plot = p_observed,
@@ -539,6 +503,7 @@ ggsave(
   dpi = 600,
   bg = "transparent"
 )
+
 ggsave(
   filename = "InvSimpson_alpha_diversity.png",
   plot = p_invsimpson,
@@ -562,8 +527,7 @@ ggsave(
 )
 ```
 
-
-Phylogenetic diversity from `picante`.
+#### Phylogenetic diversity from `picante`
 
 ```{r}
 set.seed(123)
@@ -640,13 +604,12 @@ pd_plot <- ggplot(
   labs(
     x = "Pain Severity",
     y = "Faith's Phylogenetic Diversity",
-    #title = "Phylogenetic diversity by pain severity",
     subtitle = pd_label
   )
+
 pd_plot
 ```
 
-# Save Figures
 ```{r}
 ggsave(
   filename = "Faith_PD.png",
@@ -671,7 +634,7 @@ ggsave(
 )
 ```
 
-### New beta diversity for pain severity, with plots
+### Beta Diversity
 
 ```{r}
 set.seed(123)
@@ -759,6 +722,7 @@ scores$Subject.ID <- rownames(scores)
 
 # Aitchison distance
 aitch <- vegan::vegdist(clr_mat, method = "euclidean")
+
 # ----------------------------------------------------------
 # PERMANOVA
 # ----------------------------------------------------------
@@ -823,6 +787,7 @@ get_adj_p <- function(metric_name) {
 # ----------------------------------------------------------
 # PCoA plots from phyloseq-supported distances
 # ----------------------------------------------------------
+
 sample_data(rare_r)$pain_severity <- factor(
   sample_data(rare_r)$pain_severity,
   levels = c("No pain", "Mild pain", "Moderate pain", "Severe pain"),
@@ -864,7 +829,6 @@ p_uni <- plot_ordination(rare_r, ord_uni, color = "pain_severity") +
     legend.key = element_blank()
   ) +
   labs(
-    #title = "PCoA using UniFrac",
     x = paste0("PCoA1 [", round(ord_uni$values$Relative_eig[1] * 100, 1), "%]"),
     y = paste0("PCoA2 [", round(ord_uni$values$Relative_eig[2] * 100, 1), "%]"),
     title = bquote("UniFrac"),
@@ -902,7 +866,6 @@ p_jac <- plot_ordination(rare_r, ord_jac, color = "pain_severity") +
     legend.key = element_blank()
   ) +
   labs(
-    #title = "PCoA using Jaccard",
     x = paste0("PCoA1 [", round(ord_jac$values$Relative_eig[1] * 100, 1), "%]"),
     y = paste0("PCoA2 [", round(ord_jac$values$Relative_eig[2] * 100, 1), "%]"),
     title = bquote("Jaccard"),
@@ -940,7 +903,6 @@ p_wuni <- plot_ordination(rare_r, ord_wuni, color = "pain_severity") +
     legend.key = element_blank()
   ) +
   labs(
-    #title = "PCoA using Weighted UniFrac",
     x = paste0("PCoA1 [", round(ord_wuni$values$Relative_eig[1] * 100, 1), "%]"),
     y = paste0("PCoA2 [", round(ord_wuni$values$Relative_eig[2] * 100, 1), "%]"),
     title = bquote("Weighted UniFrac"),
@@ -978,14 +940,12 @@ p_bray <- plot_ordination(rare_r, ord_bray, color = "pain_severity") +
     legend.key = element_blank()
   ) +
   labs(
-    #title = "PCoA using Bray-Curtis",
     x = paste0("PCoA1 [", round(ord_bray$values$Relative_eig[1] * 100, 1), "%]"),
     y = paste0("PCoA2 [", round(ord_bray$values$Relative_eig[2] * 100, 1), "%]"),
     title = bquote ("Bray-Curtis"),
     subtitle = bquote("Adjusted " * italic(p) == .(get_adj_p("Bray-Curtis"))),
     color = "Pain Severity"
   )
-
 
 # PCA scores
 scores <- as.data.frame(pca1$x)
@@ -1074,7 +1034,6 @@ p_aitch <- ggplot(
     subtitle = bquote("Adjusted " * italic(p) == .(get_adj_p("Aitchison Distance")))
   )
 
-
 p_aitch
 
 # ----------------------------------------------------------
@@ -1132,7 +1091,6 @@ p_guni <- ggplot(
     legend.key = element_blank()
   ) +
   labs(
-    #title = "PCoA using Generalized UniFrac",
     x = paste0("PCoA1 [", guni_var[1], "%]"),
     y = paste0("PCoA2 [", guni_var[2], "%]"),
     title = bquote("Generalized UniFrac"),
@@ -1142,13 +1100,13 @@ p_guni <- ggplot(
 
 # Print individual plots (raw p-values)
 p_uni
-p_guni #not sure why guni didn't have %var on axes. -fixed it above.
+p_guni
 p_jac
 p_wuni
 p_bray
 p_aitch
 ```
-### Save beta-diversity plots
+
 ```{r}
 ggsave(
   filename = "Bray-Curtis.pdf",
@@ -1160,6 +1118,7 @@ ggsave(
   device = "pdf",
   bg = "transparent"
 )
+
 ggsave(
   filename = "Bray-Curtis.png",
   plot = p_bray,
@@ -1201,6 +1160,7 @@ ggsave(
   device = "pdf",
   bg = "transparent"
 )
+
 ggsave(
   filename = "WUniFrac.png",
   plot = p_wuni,
@@ -1263,20 +1223,20 @@ ggsave(
   device = "pdf",
   bg = "transparent"
 )
-
 ```
 
 #### PAM clustering
 
-##### Bray-Curtis for pain severity
+##### Bray-Curtis
 
 Calculate BC dissimilarity on rarefied data, then cluster with PAM, k selected using mean silhouette width.
+
 ```{r}
 #determine number of clusters
-library(cluster) #remotes::install_version("cluster", version = "2.1.8.1")
-library(scales) #remotes::install_version("scales", version = "1.4.0")
+library(cluster)
+library(scales)
 
-#use sil to choose number of clusters
+# Use sil to choose number of clusters
 set.seed(123)
 k.max <- 10
 
@@ -1285,8 +1245,6 @@ SIL = sapply(2:k.max, function(i) {
   mean(silhouette(results.coef.pam$clustering, dist = bray_dist)[,"sil_width"]) })
 
 plot(c(0,SIL), type="b", main = "Selecting k PAM clusters", ylab = "Mean Silhouette Width", xlab = "Clusters")
-
-
 ```
 
 Visualize clusters and pain severity status on PCoA. 
@@ -1294,9 +1252,6 @@ Visualize clusters and pain severity status on PCoA.
 ```{r}
 set.seed(123)
 pam_bc = pam(bray_dist, 4, nstart = 50, diss = T)
-
-# ord = cmdscale(bray_dist, 4, eig = TRUE)
-# plot(ord$points, col = clusters, pch = 19, xlab="PCoA1", ylab="PCoA2")
 
 sample_data(rare_r)$Cluster = as.factor(pam_bc$clustering) #add clustering information to ps object's sample data
 
@@ -1330,13 +1285,13 @@ sum(is.na(merged_meta_r$bray_pcoa1))
 head(merged_meta_r[, c("Subject.ID", "bray_pcoa1")])
 all(bc_axis1.df$Subject.ID %in% merged_meta_r$Subject.ID)
 ```
+
 ### CLR, Aitchison PCA, PAM clusters
 
 ```{r}
 library(zCompositions)
 library(compositions)
 library(cluster)
-
 
 # Select k for PAM clustering
 set.seed(123)
@@ -1383,7 +1338,6 @@ p_sil <- ggplot(
 p_sil
 ```
 
-###Save
 ```{r}
 ggsave(
   filename = "Aitch_SIL_plot.pdf",
@@ -1397,7 +1351,8 @@ ggsave(
 )
 ```
 
-# PAM clustering using k = 2 --> identified 2vclusters after updating samples
+# PAM clustering using k = 2 (identified 2 clusters)
+
 ```{r}
 set.seed(123)
 pam_aitch <- pam(aitch, 2, nstart = 50, diss = TRUE)
@@ -1471,12 +1426,6 @@ merged_meta_r <- merged_meta_r %>%
     )
   )
 
-# merged_meta_r$Cluster_Aitchison <- factor(
-#   merged_meta_r$Cluster_Aitchison,
-#   levels = c(1, 2, 3),
-#   labels = c("Cluster 1", "Cluster 2", "Cluster 3")
-# )
-
 # Plot Aitchison PCA by pain severity and cluster
 aitch_plot <- ggplot(
   merged_meta_r,
@@ -1493,7 +1442,6 @@ aitch_plot <- ggplot(
     aes(group = Cluster_Aitchison),
     linewidth = 0.5,
     linetype = 2,
-    #color = "black",
     type = "norm"
   ) +
   
@@ -1530,10 +1478,8 @@ aitch_plot
 sum(is.na(merged_meta_r$PC1))
 sum(is.na(merged_meta_r$Cluster_Aitchison))
 all(scores$Subject.ID %in% merged_meta_r$Subject.ID)
-
 ```
 
-### Save Clusters
 ```{r}
 ggsave(
   filename = "Aitchison_pain.png",
@@ -1555,7 +1501,6 @@ ggsave(
   device = "pdf",
   bg = "transparent"
 )
-
 ```
 
 ### Fisher's test for cluster based on pain severity
@@ -1614,6 +1559,7 @@ p.adjust(
 ```
 
 ## Graph cluster counts and Fisher's results
+
 ```{r}
 cluster_counts <- merged_meta_r %>%
   mutate(
@@ -1759,8 +1705,6 @@ pairwise_df <- tibble::tibble(
   )
 
 pairwise_df
-
-
 ```
 
 # Save 
@@ -1787,12 +1731,12 @@ ggsave(
   bg = "transparent"
 )
 ```
-### Secondary cluster analayses...zicoseq 
 
-```{r, eval =F}
+### Secondary cluster analayses using Zicoseq 
+
+```{r, eval = FALSE}
 ############################################################
 # Secondary analysis: characterize Aitchison clusters
-
 ############################################################
 
 library(GUniFrac)
@@ -1901,7 +1845,6 @@ sig_zico_cluster <- zico_cluster_results %>%
 
 sig_zico_cluster
 
-
 ############################################################
 # Part 2. Cluster-defining taxa heatmap
 ############################################################
@@ -1921,6 +1864,7 @@ clr_cluster_meta <- clr_cluster %>%
 ############################################################
 # Part 3. Identify which Cluster each sig taxa is highest in
 ############################################################
+
 if (nrow(sig_zico_cluster) > 0) {
   
   cluster_taxa_medians <- clr_cluster_meta %>%
@@ -1983,6 +1927,7 @@ cluster_taxa_summary
 ############################################################
 # Part 4. Generic DAA volcano plot for clusters
 ############################################################
+
 cluster_taxa_medians <- cluster_taxa_medians %>%
   dplyr::mutate(
     Genus_clean = dplyr::case_when(
@@ -2072,12 +2017,9 @@ cluster_taxa_plot <- cluster_taxa_plot +
     plot.margin = margin(5, 5, 5, 5)
   )
 cluster_taxa_plot
-
 ```
 
-###Save
 ```{r}
-
 ggsave(
   filename = "cluster_taxa_plot.pdf",
   plot = cluster_taxa_plot,
@@ -2188,9 +2130,6 @@ cluster_taxa_pairwise_direction
 
 cluster_taxa_pairwise_direction %>%
   dplyr::filter(Pairwise_FDR < 0.05)
-
-
-
 
 ############################################################
 # 6. Plot cluster pairwise comparisons for significant taxa
@@ -2321,12 +2260,9 @@ kruskal.test(
   Dialister ~ case_control_new,
   data = merged_meta_r
 )
-
 ```
 
-###Save
 ```{r}
-
 ggsave(
   filename = "dialister_plot.pdf",
   plot = dialister_plot,
