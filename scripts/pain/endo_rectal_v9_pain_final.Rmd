@@ -34,8 +34,8 @@ library(purrr)
 
 ```{r}
 setwd()
-
-phylo = readRDS("data/Phylo_public.rds")
+fig_dir = getwd()
+phylo = readRDS("Phylo_public.rds")
 meta = samdat_tbl(phylo)
 
 #look at metadata
@@ -88,7 +88,7 @@ sample_data(merged_r)$Subject.ID = sample_names(merged_r)
 
 # Add corrected patient demographics metadata
 newdata = read_xlsx(
-"data/Newdata_endo_pain.xlsx",col_names = T, sheet = 1)
+"Newdata_endo_pain.xlsx",col_names = T, sheet = 1)
 
 splits = strsplit(newdata$`Study ID`, split = "-")
 splits = lapply(splits, head, 2)
@@ -220,6 +220,34 @@ kruskal.test(merged_meta_r$lib_size ~ merged_meta_r$pain_severity)
 set.seed(123)
 rare_r = rarefy_even_depth(merged_r, replace = F) #rarefy to min depth or 2k, whichever greater
 ```
+
+
+```{r}
+library(digest)
+
+hash_phyloseq_otu <- function(ps) {
+  x <- as(phyloseq::otu_table(ps), "matrix")
+
+  x <- x[
+    order(rownames(x)),
+    order(colnames(x)),
+    drop = FALSE
+  ]
+
+  digest::digest(x, algo = "sha256")
+}
+
+rare_hash = hash_phyloseq_otu(rare_r)
+rare_hash
+merged_hash = hash_phyloseq_otu(merged_r)
+merged_hash
+
+
+```
+
+
+
+
 
 ### Check matched samples
 
@@ -2397,7 +2425,7 @@ ggsave(
 
 ### Secondary cluster analayses using Zicoseq 
 
-```{r, eval = FALSE}
+```{r, eval = T}
 ############################################################
 # Secondary analysis: characterize Aitchison clusters
 # Taxa + predicted functional ecology
@@ -3151,7 +3179,7 @@ library(psych)
 set.seed(123)
 
 #get counts
-sparcc_tab = merged_r |> tax_glom(taxrank = "Genus") |> tax_filter(min_prevalence = 0.2)
+sparcc_tab = rare_r |> tax_glom(taxrank = "Genus") |> tax_filter(min_prevalence = 0.2)
 
 sparcc_counts = otu_table(sparcc_tab)
 sparcc_ra = sparcc_counts / rowSums(sparcc_counts) #rel abundance
@@ -3161,7 +3189,7 @@ dfClr = as.data.frame(clr(sparcc_counts + 1))
 subs = dfClr[, sample(colnames(dfClr), 10)]
 pairs(subs)
 
-MtxClr <- as.matrix(clr(sparcc_counts))
+MtxClr <- as.matrix(compositions::clr(sparcc_counts))
 
 spearCorTestClr <- corr.test(MtxClr, method = "spearman", adjust = "none")
 spearCorClr <- spearCorTestClr$r
@@ -3359,3 +3387,29 @@ ggraph(g, layout = "kk") +
     legend.text  = element_text(size = 9)
   )
 ```
+
+
+```{r}
+ggsave(
+  filename = "rare_network_orig.svg",
+  path = fig_dir,
+  width = 2048,
+  height = 2048,
+  units = "px",
+  device = "svg",
+  bg = "transparent"
+)
+```
+
+
+## Housekeeping
+```{r}
+sessionInfo()
+extSoftVersion()
+La_version()
+RNGkind()
+capabilities()
+
+```
+
+
