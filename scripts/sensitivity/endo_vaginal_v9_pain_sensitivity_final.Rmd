@@ -34,7 +34,7 @@ library(purrr)
 
 ```{r}
 setwd()
-
+fig_dir = getwd()
 phylo = readRDS("data/Phylo_public_original_labels.rds")
 meta = samdat_tbl(phylo)
 
