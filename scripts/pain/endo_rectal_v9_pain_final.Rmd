@@ -35,7 +35,7 @@ library(purrr)
 ```{r}
 setwd()
 fig_dir = getwd()
-phylo = readRDS("Phylo_public.rds")
+phylo = readRDS("data/Phylo_public.rds")
 meta = samdat_tbl(phylo)
 
 #look at metadata
@@ -88,7 +88,7 @@ sample_data(merged_r)$Subject.ID = sample_names(merged_r)
 
 # Add corrected patient demographics metadata
 newdata = read_xlsx(
-"Newdata_endo_pain.xlsx",col_names = T, sheet = 1)
+"data/Newdata_endo_pain.xlsx",col_names = T, sheet = 1)
 
 splits = strsplit(newdata$`Study ID`, split = "-")
 splits = lapply(splits, head, 2)
