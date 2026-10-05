@@ -34,6 +34,7 @@ library(purrr)
 
 ```{r}
 setwd()
+fig_dir = getwd()
 phylo = readRDS("data/Phylo_public.rds")
 meta = samdat_tbl(phylo)
 
@@ -2031,7 +2032,7 @@ ggsave(
 )
 ```
 
-```{r}
+```{r, eval=FALSE}
 ############################################################
 # 5. Pairwise comparisons between clusters for significant taxa
 ############################################################
@@ -2261,7 +2262,7 @@ kruskal.test(
 )
 ```
 
-```{r}
+```{r, eval=FALSE}
 ggsave(
   filename = "dialister_plot.pdf",
   plot = dialister_plot,
